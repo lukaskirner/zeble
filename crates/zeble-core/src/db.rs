@@ -98,7 +98,7 @@ fn tls() -> MakeRustlsConnect {
     MakeRustlsConnect::new(config)
 }
 
-fn pg_config(c: &ConnectionConfig) -> tokio_postgres::Config {
+fn pg_config(c: &ConnectionConfig, password: &str) -> tokio_postgres::Config {
     let mut pg = tokio_postgres::Config::new();
     pg.host(c.host.trim())
         .port(c.port)
@@ -112,8 +112,8 @@ fn pg_config(c: &ConnectionConfig) -> tokio_postgres::Config {
             SslMode::Prefer => tokio_postgres::config::SslMode::Prefer,
             SslMode::Require => tokio_postgres::config::SslMode::Require,
         });
-    if !c.password.is_empty() {
-        pg.password(c.password.as_str());
+    if !password.is_empty() {
+        pg.password(password);
     }
     if c.read_only {
         pg.options("-c default_transaction_read_only=on");
@@ -158,6 +158,7 @@ pub(crate) fn pg_err(e: tokio_postgres::Error) -> anyhow::Error {
 
 fn pool_err(e: PoolError) -> anyhow::Error {
     match e {
+        PoolError::Backend(e) if is_auth_error(&e) => pg_err(e).context(AuthFailed),
         PoolError::Backend(e) => pg_err(e).context(ConnectionLost),
         PoolError::Timeout(_) => anyhow!("Timed out waiting for a database connection"),
         other => anyhow!(other.to_string()),
@@ -184,61 +185,129 @@ pub fn error_text(err: &anyhow::Error) -> String {
         .join(": ")
 }
 
+/// Marker context on errors caused by the server rejecting the login.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthFailed;
+
+impl std::fmt::Display for AuthFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Authentication failed")
+    }
+}
+
+fn is_auth_error(e: &tokio_postgres::Error) -> bool {
+    use tokio_postgres::error::SqlState;
+    e.code().is_some_and(|c| {
+        *c == SqlState::INVALID_PASSWORD || *c == SqlState::INVALID_AUTHORIZATION_SPECIFICATION
+    })
+}
+
 /// True when `err` means the connection is gone rather than a failed query.
 pub fn is_connection_lost(err: &anyhow::Error) -> bool {
     err.downcast_ref::<ConnectionLost>().is_some()
 }
 
-/// A handle that asks the server to cancel whatever its connection is running.
+/// Stops a running operation: asks the server to cancel a query, or aborts
+/// a local task (such as a password command, whose process is then killed).
 #[derive(Clone)]
-pub struct Canceller(CancelToken);
+pub struct Canceller(CancelKind);
+
+#[derive(Clone)]
+enum CancelKind {
+    Query(CancelToken),
+    Task(tokio::task::AbortHandle),
+}
 
 impl Canceller {
+    pub fn abort_task(handle: tokio::task::AbortHandle) -> Self {
+        Canceller(CancelKind::Task(handle))
+    }
+
     pub fn cancel(&self) {
-        let token = self.0.clone();
-        runtime().spawn(async move {
-            let _ = token.cancel_query(tls()).await;
-        });
+        match &self.0 {
+            CancelKind::Query(token) => {
+                let token = token.clone();
+                runtime().spawn(async move {
+                    let _ = token.cancel_query(tls()).await;
+                });
+            }
+            CancelKind::Task(handle) => handle.abort(),
+        }
     }
 }
 
 /// An open connection target: a shared pool for browsing, and a factory for
 /// dedicated query sessions.
+///
+/// With a password command, the password is fetched once at connect and
+/// reused. When a new connection is rejected for its password (e.g. an
+/// expired token), the command runs again and the pool is rebuilt.
 #[derive(Clone)]
 pub struct Db {
+    inner: Arc<DbInner>,
+}
+
+struct DbInner {
+    config: ConnectionConfig,
+    state: std::sync::RwLock<PoolState>,
+    /// Serialises password refreshes so concurrent failures run it once.
+    refresh: tokio::sync::Mutex<()>,
+}
+
+#[derive(Clone)]
+struct PoolState {
     pool: Pool,
     pg: tokio_postgres::Config,
+    generation: u64,
+}
+
+fn build_pool(pg: &tokio_postgres::Config) -> anyhow::Result<Pool> {
+    let manager = Manager::from_config(
+        pg.clone(),
+        tls(),
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    Pool::builder(manager)
+        .max_size(POOL_SIZE)
+        .runtime(Runtime::Tokio1)
+        .wait_timeout(Some(Duration::from_secs(30)))
+        .create_timeout(Some(Duration::from_secs(15)))
+        .build()
+        .map_err(|e| anyhow!(e.to_string()))
 }
 
 impl Db {
-    /// Build the pool and open its first connection, returning the server
-    /// version string (e.g. "17.2").
-    pub async fn connect(config: &ConnectionConfig) -> anyhow::Result<(Db, String)> {
+    /// Build the pool with `password` (from [`crate::secret::resolve_password`])
+    /// and open its first connection, returning the server version (e.g. "17.2").
+    pub async fn connect(
+        config: &ConnectionConfig,
+        password: &str,
+    ) -> anyhow::Result<(Db, String)> {
         config.validate()?;
-        let pg = pg_config(config);
-        let manager = Manager::from_config(
-            pg.clone(),
-            tls(),
-            ManagerConfig {
-                recycling_method: RecyclingMethod::Fast,
-            },
-        );
-        let pool = Pool::builder(manager)
-            .max_size(POOL_SIZE)
-            .runtime(Runtime::Tokio1)
-            .wait_timeout(Some(Duration::from_secs(30)))
-            .create_timeout(Some(Duration::from_secs(15)))
-            .build()
-            .map_err(|e| anyhow!(e.to_string()))?;
-        let db = Db { pool, pg };
+        let pg = pg_config(config, password);
+        let db = Db {
+            inner: Arc::new(DbInner {
+                config: config.clone(),
+                state: std::sync::RwLock::new(PoolState {
+                    pool: build_pool(&pg)?,
+                    pg,
+                    generation: 0,
+                }),
+                refresh: tokio::sync::Mutex::new(()),
+            }),
+        };
         let version = db.server_version().await?;
         Ok((db, version))
     }
 
-    /// Connect once and close again: the connection form's "Test" button.
+    /// Resolve the password, connect once and close again: the form's
+    /// "Test Connection" button.
     pub async fn test(config: &ConnectionConfig) -> anyhow::Result<String> {
         config.validate()?;
-        let session = QuerySession::open_with(pg_config(config)).await?;
+        let password = crate::secret::resolve_password(config).await?;
+        let session = QuerySession::open_with(pg_config(config, &password)).await?;
         let row = session
             .client
             .query_one("SHOW server_version", &[])
@@ -256,18 +325,72 @@ impl Db {
         Ok(row.get::<_, String>(0))
     }
 
+    fn state(&self) -> PoolState {
+        self.inner
+            .state
+            .read()
+            .expect("pool state poisoned")
+            .clone()
+    }
+
+    /// After a login was rejected with the pool of `failed_generation`: run
+    /// the password command again and rebuild the pool, unless another task
+    /// already did. Returns false when there is no command to retry with.
+    async fn refresh_password(&self, failed_generation: u64) -> anyhow::Result<bool> {
+        let Some(command) = self.inner.config.password_command() else {
+            return Ok(false);
+        };
+        let _guard = self.inner.refresh.lock().await;
+        if self.state().generation != failed_generation {
+            return Ok(true);
+        }
+        let password = crate::secret::run_password_command(command).await?;
+        let pg = pg_config(&self.inner.config, &password);
+        let pool = build_pool(&pg)?;
+        let mut state = self.inner.state.write().expect("pool state poisoned");
+        state.pool.close();
+        *state = PoolState {
+            pool,
+            pg,
+            generation: failed_generation + 1,
+        };
+        Ok(true)
+    }
+
     /// Borrow a pooled connection.
-    pub async fn client(&self) -> anyhow::Result<deadpool_postgres::Object> {
-        self.pool.get().await.map_err(pool_err)
+    pub async fn client(&self) -> anyhow::Result<PooledClient> {
+        let state = self.state();
+        match state.pool.get().await {
+            Ok(c) => Ok(c),
+            Err(PoolError::Backend(e)) if is_auth_error(&e) => {
+                if self.refresh_password(state.generation).await? {
+                    self.state().pool.get().await.map_err(pool_err)
+                } else {
+                    Err(pool_err(PoolError::Backend(e)))
+                }
+            }
+            Err(e) => Err(pool_err(e)),
+        }
     }
 
     /// Open a dedicated connection for a query tab.
     pub async fn open_session(&self) -> anyhow::Result<QuerySession> {
-        QuerySession::open_with(self.pg.clone()).await
+        let state = self.state();
+        match state.pg.connect(tls()).await {
+            Ok((client, connection)) => Ok(QuerySession::spawn(client, connection)),
+            Err(e) if is_auth_error(&e) => {
+                if self.refresh_password(state.generation).await? {
+                    QuerySession::open_with(self.state().pg).await
+                } else {
+                    Err(pg_err(e).context(AuthFailed))
+                }
+            }
+            Err(e) => Err(pg_err(e)),
+        }
     }
 
     pub fn close(&self) {
-        self.pool.close();
+        self.state().pool.close();
     }
 }
 
@@ -280,14 +403,22 @@ pub struct QuerySession {
 impl QuerySession {
     async fn open_with(pg: tokio_postgres::Config) -> anyhow::Result<QuerySession> {
         let (client, connection) = pg.connect(tls()).await.map_err(pg_err)?;
+        Ok(Self::spawn(client, connection))
+    }
+
+    fn spawn<S, T>(client: Client, connection: tokio_postgres::Connection<S, T>) -> QuerySession
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
         tokio::spawn(async move {
             let _ = connection.await;
         });
-        Ok(QuerySession { client })
+        QuerySession { client }
     }
 
     pub fn canceller(&self) -> Canceller {
-        Canceller(self.client.cancel_token())
+        Canceller(CancelKind::Query(self.client.cancel_token()))
     }
 
     pub fn is_closed(&self) -> bool {
@@ -301,6 +432,6 @@ impl QuerySession {
 }
 
 /// A canceller for a pooled connection, taken before running a query on it.
-pub fn pooled_canceller(client: &deadpool_postgres::Object) -> Canceller {
-    Canceller(client.cancel_token())
+pub fn pooled_canceller(client: &PooledClient) -> Canceller {
+    Canceller(CancelKind::Query(client.cancel_token()))
 }

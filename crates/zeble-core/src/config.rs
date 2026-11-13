@@ -102,6 +102,10 @@ pub struct ConnectionConfig {
     /// Stored in plain text in `connections.json` (file mode 0600).
     #[serde(default)]
     pub password: String,
+    /// When set, the password is this shell command's output instead of
+    /// `password`; the output is never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_command: Option<String>,
     pub database: String,
     #[serde(default)]
     pub ssl_mode: SslMode,
@@ -121,6 +125,7 @@ impl Default for ConnectionConfig {
             port: 5432,
             user: "postgres".into(),
             password: String::new(),
+            password_command: None,
             database: "postgres".into(),
             ssl_mode: SslMode::Prefer,
             color: None,
@@ -151,6 +156,13 @@ impl ConnectionConfig {
         )
     }
 
+    /// The password command, when the connection uses one.
+    pub fn password_command(&self) -> Option<&str> {
+        self.password_command
+            .as_deref()
+            .filter(|c| !c.trim().is_empty())
+    }
+
     /// Check the fields needed to connect.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.host.trim().is_empty() {
@@ -168,9 +180,11 @@ impl ConnectionConfig {
     /// Fill host, port, user, password, database and SSL mode from a
     /// `postgres://user:pass@host:port/db?sslmode=require` URL.
     ///
-    /// Name, colour and read-only are kept. Fields missing from the URL keep
-    /// their defaults (port 5432, user `postgres`, database = user).
-    pub fn apply_url(&mut self, input: &str) -> anyhow::Result<()> {
+    /// Name, colour and read-only are kept. Missing port, user and database
+    /// fall back to 5432, `postgres` and the user. A URL without a password
+    /// leaves the password and password command alone; one with a password
+    /// sets it and drops the command. Returns whether the URL had a password.
+    pub fn apply_url(&mut self, input: &str) -> anyhow::Result<bool> {
         let input = input.trim();
         let url = url::Url::parse(input).context("Not a valid connection URL")?;
         if !matches!(url.scheme(), "postgres" | "postgresql") {
@@ -199,7 +213,11 @@ impl ConnectionConfig {
         } else {
             user
         };
-        self.password = url.password().map(decode).unwrap_or_default();
+        let has_password = url.password().is_some();
+        if let Some(p) = url.password() {
+            self.password = decode(p);
+            self.password_command = None;
+        }
         let db = decode(url.path().trim_start_matches('/'));
         self.database = if db.is_empty() { self.user.clone() } else { db };
         for (k, v) in url.query_pairs() {
@@ -208,7 +226,7 @@ impl ConnectionConfig {
                     SslMode::parse(&v).with_context(|| format!("Unknown sslmode \"{v}\""))?;
             }
         }
-        Ok(())
+        Ok(has_password)
     }
 }
 
@@ -231,6 +249,19 @@ mod tests {
         assert_eq!(c.password, "p:ss");
         assert_eq!(c.database, "my db");
         assert_eq!(c.ssl_mode, SslMode::Require);
+    }
+
+    #[test]
+    fn url_password_replaces_command_and_missing_one_keeps_it() {
+        let mut c = ConnectionConfig {
+            password_command: Some("op read x".into()),
+            ..Default::default()
+        };
+        assert!(!c.apply_url("postgres://bob@host/db").unwrap());
+        assert_eq!(c.password_command(), Some("op read x"));
+        assert!(c.apply_url("postgres://bob:pw@host/db").unwrap());
+        assert_eq!(c.password, "pw");
+        assert_eq!(c.password_command(), None);
     }
 
     #[test]

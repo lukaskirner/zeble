@@ -16,6 +16,28 @@ pub fn on_db<T: Send + 'static>(
     }
 }
 
+/// Like [`on_db`], plus a handle that aborts the task (dropping it kills a
+/// running password command). An aborted task resolves to "Cancelled".
+pub fn on_db_abortable<T: Send + 'static>(
+    fut: impl Future<Output = T> + Send + 'static,
+) -> (
+    impl Future<Output = anyhow::Result<T>>,
+    zeble_core::AbortHandle,
+) {
+    let handle = zeble_core::runtime().spawn(fut);
+    let abort = handle.abort_handle();
+    let fut = async move {
+        handle.await.map_err(|e| {
+            if e.is_cancelled() {
+                anyhow::anyhow!("Cancelled")
+            } else {
+                anyhow::anyhow!("database task failed: {e}")
+            }
+        })
+    };
+    (fut, abort)
+}
+
 /// `1234567` -> `1,234,567`.
 pub fn thousands(n: u64) -> String {
     let s = n.to_string();

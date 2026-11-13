@@ -5,9 +5,11 @@ pub mod config;
 pub mod db;
 pub mod introspect;
 pub mod query;
+pub mod secret;
 pub mod split;
 pub mod sql;
 pub mod store;
 
 pub use config::{ColorTag, ConnectionConfig, SslMode};
 pub use db::{Canceller, Db, QuerySession, is_connection_lost, pooled_canceller, runtime};
+pub use tokio::task::AbortHandle;

@@ -27,7 +27,8 @@ where
     Fut: std::future::Future<Output = ()> + Send,
 {
     runtime().block_on(async move {
-        match Db::connect(&config).await {
+        let password = zeble_core::secret::resolve_password(&config).await.unwrap();
+        match Db::connect(&config, &password).await {
             Ok((db, _)) => f(db).await,
             Err(e) => eprintln!("skipping: fixture database unavailable: {e:#}"),
         }
@@ -276,7 +277,7 @@ fn bad_credentials_give_a_readable_error() {
     let mut c = config();
     c.password = "wrong".into();
     runtime().block_on(async move {
-        if Db::connect(&config()).await.is_err() {
+        if Db::connect(&config(), "zeble").await.is_err() {
             return; // fixture not running
         }
         let err = Db::test(&c).await.unwrap_err().to_string();
@@ -298,5 +299,65 @@ fn per_statement_timing() {
         assert!(t[0] < 200, "{t:?}");
         assert!(t[1] >= 350, "{t:?}");
         assert!(t[2] < 200, "{t:?}");
+    });
+}
+
+#[test]
+fn password_from_command() {
+    let mut c = config();
+    c.password = String::new();
+    c.password_command = Some("printf zeble".into());
+    with_db(c.clone(), |db| async move {
+        let s = db.open_session().await.unwrap();
+        assert!(s.run("SELECT 1").await.error.is_none());
+    });
+    runtime().block_on(async move {
+        if Db::connect(&config(), "zeble").await.is_err() {
+            return;
+        }
+        assert!(
+            Db::test(&c)
+                .await
+                .unwrap()
+                .starts_with(|ch: char| ch.is_ascii_digit())
+        );
+        c.password_command = Some("echo nope >&2; exit 1".into());
+        let err = Db::test(&c).await.unwrap_err().to_string();
+        assert!(
+            err.contains("exited with code 1") && err.contains("nope"),
+            "{err}"
+        );
+    });
+}
+
+#[test]
+fn rejected_password_reruns_the_command_once() {
+    // The command prints a wrong password the first time and the right one
+    // after, like an expired token being refreshed.
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("ran");
+    let count = dir.path().join("count");
+    let mut c = config();
+    c.password = String::new();
+    c.password_command = Some(format!(
+        "echo x >> '{count}'; if [ -f '{marker}' ]; then printf zeble; else touch '{marker}'; printf wrong; fi",
+        count = count.display(),
+        marker = marker.display(),
+    ));
+    runtime().block_on(async move {
+        if Db::connect(&config(), "zeble").await.is_err() {
+            return;
+        }
+        let password = zeble_core::secret::resolve_password(&c).await.unwrap();
+        assert_eq!(password, "wrong");
+        // The first pooled connection is rejected, the command reruns, then it works.
+        let (db, _) = Db::connect(&c, &password).await.unwrap();
+        let s = db.open_session().await.unwrap();
+        assert!(s.run("SELECT 1").await.error.is_none());
+        let runs = std::fs::read_to_string(&count).unwrap().lines().count();
+        assert_eq!(
+            runs, 2,
+            "command should run once at connect and once on rejection"
+        );
     });
 }

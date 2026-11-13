@@ -58,6 +58,14 @@ Saved connections are stored in `connections.json` in the platform config folder
 `ZEBLE_DATA_DIR` to use a different folder. **Passwords are stored in plain text** in that file,
 which is written with mode `0600`.
 
+Instead of a password, a connection can use a **password command** (switch the Password field to
+*Command*), e.g. `op read op://Private/prod-db/password` or
+`aws rds generate-db-auth-token …`. It runs in your login shell (`$SHELL -l -c`) when the window
+connects. Its output, minus the trailing newline, is the password and is never written to disk.
+It gets 30 seconds, and Cancel in the top bar stops it, along with anything it started. When the
+server later rejects the password (for example an expired token), the command runs once more and
+the connection is retried.
+
 ## Development
 
 ```

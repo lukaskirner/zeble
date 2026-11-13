@@ -1,13 +1,14 @@
 //! The add/edit connection form shown beside the connection list.
 
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, IconName, IndexPath, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     input::{Input, InputEvent, InputState},
     label::Label,
     select::{Select, SelectState},
+    tab::{Tab, TabBar},
     v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -38,6 +39,9 @@ pub struct ConnectionForm {
     port: Entity<InputState>,
     user: Entity<InputState>,
     password: Entity<InputState>,
+    password_command: Entity<InputState>,
+    /// Password mode: the command field is used instead of the password.
+    use_command: bool,
     database: Entity<InputState>,
     ssl: Entity<SelectState<Vec<SharedString>>>,
     color: Option<ColorTag>,
@@ -85,6 +89,12 @@ impl ConnectionForm {
                 .masked(true)
                 .default_value(config.password.clone())
         });
+        let password_command = input(
+            "op read op://Private/database/password",
+            config.password_command.clone().unwrap_or_default(),
+            window,
+            cx,
+        );
         let database = input("postgres", config.database.clone(), window, cx);
         let ssl = cx.new(|cx| {
             SelectState::new(
@@ -103,6 +113,7 @@ impl ConnectionForm {
             }
         })];
         Self {
+            use_command: config.password_command().is_some(),
             color: config.color,
             read_only: config.read_only,
             base: config,
@@ -113,6 +124,7 @@ impl ConnectionForm {
             port,
             user,
             password,
+            password_command,
             database,
             ssl,
             test: TestState::Idle,
@@ -153,7 +165,20 @@ impl ConnectionForm {
             port,
             user: text(&self.user),
             // Passwords may legitimately have surrounding spaces.
-            password: self.password.read(cx).value().to_string(),
+            password: if self.use_command {
+                String::new()
+            } else {
+                self.password.read(cx).value().to_string()
+            },
+            password_command: if self.use_command {
+                let cmd = text(&self.password_command);
+                if cmd.is_empty() {
+                    anyhow::bail!("Enter the command that prints the password");
+                }
+                Some(cmd)
+            } else {
+                None
+            },
             database: text(&self.database),
             ssl_mode,
             color: self.color,
@@ -189,8 +214,11 @@ impl ConnectionForm {
         }
         let mut config = self.collect(cx).unwrap_or_else(|_| self.base.clone());
         match config.apply_url(&url) {
-            Ok(()) => {
+            Ok(had_password) => {
                 self.set_fields(&config, window, cx);
+                if had_password {
+                    self.use_command = false;
+                }
                 self.url.update(cx, |s, cx| s.set_value("", window, cx));
                 self.error = None;
             }
@@ -251,6 +279,43 @@ impl ConnectionForm {
             .child(input)
     }
 
+    /// The password field with its Password | Command switch.
+    fn render_password(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        v_flex()
+            .gap_1()
+            .flex_1()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(Label::new("Password").text_sm())
+                    .child(
+                        TabBar::new("password-mode")
+                            .segmented()
+                            .xsmall()
+                            .selected_index(if self.use_command { 1 } else { 0 })
+                            .child(Tab::new().label("Password"))
+                            .child(Tab::new().label("Command"))
+                            .on_click(cx.listener(|this, ix: &usize, window, cx| {
+                                this.use_command = *ix == 1;
+                                let field = if this.use_command {
+                                    &this.password_command
+                                } else {
+                                    &this.password
+                                };
+                                field.update(cx, |s, cx| s.focus(window, cx));
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(if self.use_command {
+                Input::new(&self.password_command)
+                    .prefix(Icon::new(IconName::SquareTerminal).xsmall())
+                    .into_any_element()
+            } else {
+                Input::new(&self.password).mask_toggle().into_any_element()
+            })
+    }
+
     fn render_colors(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let swatch = |id: &'static str, tag: Option<ColorTag>, cx: &mut Context<Self>| {
             let selected = self.color == tag;
@@ -297,9 +362,10 @@ impl Render for ConnectionForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let testing = matches!(self.test, TestState::Testing);
-        v_flex()
+        let fields = v_flex()
             .id("connection-form")
-            .size_full()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .p_6()
             .gap_4()
@@ -351,15 +417,13 @@ impl Render for ConnectionForm {
                 h_flex()
                     .gap_3()
                     .child(Self::field("User", Input::new(&self.user)))
-                    .child(Self::field(
-                        "Password",
-                        Input::new(&self.password).mask_toggle(),
-                    )),
+                    .child(Self::field("Database", Input::new(&self.database))),
             )
             .child(
                 h_flex()
                     .gap_3()
-                    .child(Self::field("Database", Input::new(&self.database)))
+                    .items_start()
+                    .child(self.render_password(cx))
                     .child(
                         Self::field("SSL mode", Select::new(&self.ssl))
                             .w_40()
@@ -382,9 +446,14 @@ impl Render for ConnectionForm {
                     })),
             )
             .child(
-                Label::new("The password is stored in plain text in Zeble's connections file.")
-                    .text_xs()
-                    .text_color(theme.muted_foreground),
+                Label::new(if self.use_command {
+                    "The command runs in your login shell ($SHELL -l -c) when you connect. \
+                     Its output is the password and is never saved."
+                } else {
+                    "The password is stored in plain text in Zeble's connections file."
+                })
+                .text_xs()
+                .text_color(theme.muted_foreground),
             )
             .when_some(self.error.clone(), |this, err| {
                 this.child(Label::new(err).text_sm().text_color(theme.danger))
@@ -397,33 +466,36 @@ impl Render for ConnectionForm {
                 TestState::Failed(msg) => {
                     this.child(Label::new(msg.clone()).text_sm().text_color(theme.danger))
                 }
-            })
-            .child(
-                h_flex()
-                    .gap_2()
-                    .pt_2()
-                    .child(
-                        Button::new("test")
-                            .outline()
-                            .label("Test Connection")
-                            .icon(IconName::Globe)
-                            .loading(testing)
-                            .disabled(testing)
-                            .on_click(cx.listener(|this, _, _, cx| this.test_connection(cx))),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("cancel")
-                            .ghost()
-                            .label("Cancel")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(FormEvent::Cancelled))),
-                    )
-                    .child(
-                        Button::new("save")
-                            .primary()
-                            .label("Save")
-                            .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-                    ),
-            )
+            });
+        v_flex().size_full().child(fields).child(
+            h_flex()
+                .gap_2()
+                .px_6()
+                .py_3()
+                .border_t_1()
+                .border_color(theme.border)
+                .child(
+                    Button::new("test")
+                        .outline()
+                        .label("Test Connection")
+                        .icon(IconName::Globe)
+                        .loading(testing)
+                        .disabled(testing)
+                        .on_click(cx.listener(|this, _, _, cx| this.test_connection(cx))),
+                )
+                .child(div().flex_1())
+                .child(
+                    Button::new("cancel")
+                        .ghost()
+                        .label("Cancel")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(FormEvent::Cancelled))),
+                )
+                .child(
+                    Button::new("save")
+                        .primary()
+                        .label("Save")
+                        .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
+                ),
+        )
     }
 }

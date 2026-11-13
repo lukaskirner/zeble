@@ -17,7 +17,7 @@ use zeble_core::{
     is_connection_lost, pooled_canceller,
 };
 
-use crate::util::on_db;
+use crate::util::{on_db, on_db_abortable};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnStatus {
@@ -89,12 +89,46 @@ impl Session {
         }
         self.status = ConnStatus::Connecting;
         let config = self.config.clone();
-        let id = self.begin("Connecting…", Arc::new(Mutex::new(None)), cx);
         cx.spawn(async move |this, cx| {
-            let result = on_db(async move { Db::connect(&config).await }).await;
+            // 1. Run the password command, if any (Cancel kills it).
+            let password = match config.password_command() {
+                None => Ok(config.password.clone()),
+                Some(cmd) => {
+                    let cmd = cmd.to_string();
+                    let (work, abort) = on_db_abortable(async move {
+                        zeble_core::secret::run_password_command(&cmd).await
+                    });
+                    let slot = Arc::new(Mutex::new(Some(Canceller::abort_task(abort))));
+                    let id = this
+                        .update(cx, |s, cx| s.begin("Running password command…", slot, cx))
+                        .ok();
+                    let result = work.await.and_then(|r| r);
+                    if let Some(id) = id {
+                        this.update(cx, |s, cx| s.end(id, cx)).ok();
+                    }
+                    result
+                }
+            };
+            // 2. Build the pool and open the first connection.
+            let result = match password {
+                Ok(password) => {
+                    let config = config.clone();
+                    let (work, abort) =
+                        on_db_abortable(async move { Db::connect(&config, &password).await });
+                    let slot = Arc::new(Mutex::new(Some(Canceller::abort_task(abort))));
+                    let id = this
+                        .update(cx, |s, cx| s.begin("Connecting…", slot, cx))
+                        .ok();
+                    let result = work.await.and_then(|r| r);
+                    if let Some(id) = id {
+                        this.update(cx, |s, cx| s.end(id, cx)).ok();
+                    }
+                    result
+                }
+                Err(e) => Err(e),
+            };
             this.update(cx, |this, cx| {
-                this.end(id, cx);
-                match result.and_then(|r| r) {
+                match result {
                     Ok((db, version)) => {
                         this.db = Some(db);
                         // "17.2 (Debian 17.2-1.pgdg120+1)" -> "17.2"
