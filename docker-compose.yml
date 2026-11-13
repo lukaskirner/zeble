@@ -1,0 +1,12 @@
+# Local Postgres seeded with the fixture schema, used by integration tests and for trying the app.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: zeble
+      POSTGRES_PASSWORD: zeble
+      POSTGRES_DB: zeble
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./fixtures/seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro

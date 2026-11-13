@@ -1,0 +1,12 @@
+[package]
+name = "zeble-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "zeble"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = { version = "=0.9.1", features = ["tree-sitter-sql"] }
+anyhow = "1"
