@@ -102,9 +102,104 @@ pub fn split_statements(sql: &str) -> Vec<(usize, &str)> {
     out
 }
 
+/// The byte range of the statement the cursor (a byte offset) belongs to,
+/// trimmed of surrounding whitespace and without its `;`.
+///
+/// A cursor inside a statement or right after its `;` belongs to it. A cursor
+/// in whitespace or comments between statements belongs to the nearest
+/// statement above, or to the first statement when there is none above.
+pub fn statement_at(sql: &str, cursor: usize) -> Option<std::ops::Range<usize>> {
+    let ranges: Vec<std::ops::Range<usize>> = split_statements(sql)
+        .into_iter()
+        .map(|(offset, text)| {
+            let start = offset + leading_trivia(text);
+            let end = offset + text.trim_end().len();
+            start..end
+        })
+        .collect();
+    let first = ranges.first()?.clone();
+    // The last statement whose start is at or before the cursor, so a cursor
+    // in the gap after a statement still belongs to it.
+    Some(
+        ranges
+            .iter()
+            .rev()
+            .find(|r| r.start <= cursor)
+            .cloned()
+            .unwrap_or(first),
+    )
+}
+
+/// Length of the whitespace and comments at the start of `text`.
+fn leading_trivia(text: &str) -> usize {
+    let b = text.as_bytes();
+    let mut i = 0;
+    loop {
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if b[i..].starts_with(b"--") {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+        } else if b[i..].starts_with(b"/*") {
+            let mut depth = 0;
+            while i < b.len() {
+                if b[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if b[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        } else {
+            return i;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::split_statements;
+    use super::{split_statements, statement_at};
+
+    fn current(sql_with_cursor: &str) -> Option<String> {
+        let cursor = sql_with_cursor.find('|').unwrap();
+        let sql = sql_with_cursor.replace('|', "");
+        statement_at(&sql, cursor).map(|r| sql[r].to_string())
+    }
+
+    #[test]
+    fn statement_under_cursor() {
+        assert_eq!(
+            current("SELECT 1;\nSEL|ECT 2;\nSELECT 3").unwrap(),
+            "SELECT 2"
+        );
+        assert_eq!(current("SELECT 1;|\nSELECT 2").unwrap(), "SELECT 1");
+        assert_eq!(current("SELECT 1;\n\n|\nSELECT 2").unwrap(), "SELECT 1");
+        assert_eq!(
+            current("SELECT 1; -- note |\nSELECT 2").unwrap(),
+            "SELECT 1"
+        );
+        assert_eq!(current("\n|\n  SELECT 1;\nSELECT 2").unwrap(), "SELECT 1");
+        assert_eq!(current("SELECT 1;\nSELECT 2|").unwrap(), "SELECT 2");
+        assert_eq!(current("SELECT 1;\n|SELECT 2").unwrap(), "SELECT 2");
+        assert_eq!(
+            current("SELECT $$a;|b$$;\nSELECT 2").unwrap(),
+            "SELECT $$a;b$$"
+        );
+        assert_eq!(
+            current("SELECT\n  1\n\n  FROM t|;").unwrap(),
+            "SELECT\n  1\n\n  FROM t"
+        );
+        assert!(current("  |-- only a comment\n").is_none());
+        assert!(current("|").is_none());
+    }
 
     fn texts(sql: &str) -> Vec<String> {
         split_statements(sql)

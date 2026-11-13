@@ -28,8 +28,9 @@ Rust, [GPUI](https://www.gpui.rs) and [gpui-kit](https://github.com/longbridge/g
 - **Query tabs (⌘T)**
   - An SQL editor with syntax highlighting above a results grid, with a draggable divider
     between them.
-  - ⌘↵ runs the selection, or everything when nothing is selected. Statements run one at a
-    time with their own timing and autocommit unless you `BEGIN`.
+  - ⌘↵ runs the statement at the cursor (tinted in the editor) or the selection. ⌘⇧↵ runs
+    everything. Statements run one at a time with their own timing and autocommit unless you
+    `BEGIN`.
   - Each tab has its own connection, so transactions and `SET` carry over from one run to the
     next. An open transaction is flagged in the tab, and closing the tab or window asks first,
     then rolls it back.

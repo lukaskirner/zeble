@@ -1,7 +1,7 @@
 //! A query tab: SQL editor on top, results below, split by a draggable
 //! divider. Each tab owns a dedicated connection so `BEGIN`/`SET` persist.
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{
@@ -9,7 +9,10 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     highlighter::{Diagnostic, DiagnosticSeverity},
-    input::{Editor, EditorState, Enter, InputEvent, Position},
+    input::{
+        Editor, EditorState, Enter, InputEvent, Position, RangeDecoration,
+        RangeDecorationCollection, RangeDecorationStyle,
+    },
     resizable::{resizable_panel, v_resizable},
     tab::{Tab, TabBar},
     table::TableState,
@@ -27,8 +30,20 @@ use zeble_core::{
 use crate::{
     grid::{GridColumn, GridDelegate, grid_element, new_grid},
     session::Session,
-    util::{duration, on_db, plural, thousands},
+    util::{duration, keys, on_db, plural, thousands},
 };
+
+actions!(query, [RunAll]);
+
+const CONTEXT: &str = "QueryTab";
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        keys("mod-shift-enter"),
+        RunAll,
+        Some(CONTEXT),
+    )]);
+}
 
 pub enum QueryTabEvent {
     /// Title or SQL changed: the workspace saves its query tabs.
@@ -52,6 +67,10 @@ pub struct QueryTab {
     /// Byte offset in the editor where the SQL that ran starts.
     ran_from: usize,
     pub in_transaction: bool,
+    /// Tints the statement ⌘↵ would run.
+    highlight: RangeDecorationCollection,
+    /// What the tint currently shows: (range, editor focused).
+    highlighted: Option<(Range<usize>, bool)>,
     result_view: ResultView,
     _subscriptions: Vec<Subscription>,
 }
@@ -70,7 +89,7 @@ impl QueryTab {
             EditorState::new(window, cx)
                 .language("sql")
                 .line_number(true)
-                .placeholder("Write SQL here, then press ⌘↵ to run it")
+                .placeholder("Write SQL here. ⌘↵ runs the statement at the cursor, ⌘⇧↵ runs all.")
                 .default_value(sql)
         });
         let grid = new_grid(GridDelegate::new(), window, cx);
@@ -78,11 +97,23 @@ impl QueryTab {
             g.delegate_mut()
                 .set_empty_text("Run a query to see results")
         });
-        let subscriptions = vec![cx.subscribe(&editor, |_, _, ev: &InputEvent, cx| {
-            if let InputEvent::Change = ev {
-                cx.emit(QueryTabEvent::Changed);
-            }
-        })];
+        let highlight = editor.update(cx, |e, cx| {
+            e.create_range_decorations_collection(vec![], cx)
+        });
+        let subscriptions = vec![
+            cx.subscribe_in(&editor, window, |this, _, ev: &InputEvent, window, cx| {
+                match ev {
+                    InputEvent::Change => cx.emit(QueryTabEvent::Changed),
+                    InputEvent::Focus | InputEvent::Blur => {}
+                    _ => return,
+                }
+                this.update_highlight(window, cx);
+            }),
+            // Cursor and selection moves only notify; follow them here.
+            cx.observe_in(&editor, window, |this, _, window, cx| {
+                this.update_highlight(window, cx)
+            }),
+        ];
         Self {
             session,
             title,
@@ -94,8 +125,46 @@ impl QueryTab {
             ran_from: 0,
             in_transaction: false,
             result_view: ResultView::Results,
+            highlight,
+            highlighted: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The statement ⌘↵ runs when nothing is selected.
+    fn current_statement(&self, cx: &App) -> Option<Range<usize>> {
+        let e = self.editor.read(cx);
+        zeble_core::split::statement_at(&e.value(), e.cursor())
+    }
+
+    fn has_selection(&self, cx: &App) -> bool {
+        !self.editor.read(cx).selected_range().is_empty()
+    }
+
+    /// Tint the current statement: none while text is selected, dimmer
+    /// while the editor is not focused.
+    fn update_highlight(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.editor.read(cx).focus_handle(cx).is_focused(window);
+        let want = if self.has_selection(cx) {
+            None
+        } else {
+            self.current_statement(cx).map(|r| (r, focused))
+        };
+        if want == self.highlighted {
+            return;
+        }
+        let color = cx.theme().info.opacity(if focused { 0.14 } else { 0.06 });
+        let decorations = want
+            .iter()
+            .map(|(r, _)| {
+                RangeDecoration::new(r.clone())
+                    .with_style(RangeDecorationStyle::Fill)
+                    .with_color(color)
+            })
+            .collect();
+        self.highlight.set(decorations, cx);
+        self.highlighted = want;
+        cx.notify();
     }
 
     pub fn sql(&self, cx: &App) -> String {
@@ -106,19 +175,25 @@ impl QueryTab {
         self.editor.update(cx, |e, cx| e.focus(window, cx));
     }
 
-    /// Run the selection, or everything when nothing is selected.
-    pub fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Run the selection if there is one; otherwise everything (`all`) or
+    /// the statement at the cursor.
+    pub fn run(&mut self, all: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.running {
             return;
         }
         let (sql, from) = {
             let e = self.editor.read(cx);
+            let text = e.value().to_string();
             let range = e.selected_range();
-            let selected = e.selected_text().to_string();
-            if selected.trim().is_empty() {
-                (e.value().to_string(), 0)
+            if !range.is_empty() {
+                (e.selected_text().to_string(), range.start)
+            } else if all {
+                (text, 0)
             } else {
-                (selected, range.start)
+                match zeble_core::split::statement_at(&text, e.cursor()) {
+                    Some(r) => (text[r.clone()].to_string(), r.start),
+                    None => return,
+                }
             }
         };
         if sql.trim().is_empty() {
@@ -453,6 +528,8 @@ impl Render for QueryTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let connected = self.session.read(cx).is_connected();
+        let has_text = !self.editor.read(cx).value().trim().is_empty();
+        let can_run = self.has_selection(cx) || self.current_statement(cx).is_some();
         let toolbar = h_flex()
             .h_10()
             .px_3()
@@ -465,10 +542,20 @@ impl Render for QueryTab {
                     .primary()
                     .icon(Lucide::Play)
                     .label("Run")
-                    .tooltip("Run selection or all (⌘↵)")
+                    .tooltip("Run the statement at the cursor, or the selection (⌘↵)")
                     .loading(self.running)
-                    .disabled(self.running || !connected)
-                    .on_click(cx.listener(|this, _, window, cx| this.run(window, cx))),
+                    .disabled(self.running || !connected || !can_run)
+                    .on_click(cx.listener(|this, _, window, cx| this.run(false, window, cx))),
+            )
+            .child(
+                Button::new("run-all")
+                    .small()
+                    .outline()
+                    .icon(Lucide::ListOrdered)
+                    .label("Run All")
+                    .tooltip("Run everything in the editor (⌘⇧↵)")
+                    .disabled(self.running || !connected || !has_text)
+                    .on_click(cx.listener(|this, _, window, cx| this.run(true, window, cx))),
             )
             .when(self.running, |d| {
                 d.child(
@@ -501,13 +588,17 @@ impl Render for QueryTab {
 
         v_flex()
             .size_full()
-            .key_context("QueryTab")
+            .key_context(CONTEXT)
             // Cmd/Ctrl+Enter would insert a newline in the editor; take it first.
             .capture_action(cx.listener(|this, action: &Enter, window, cx| {
                 if action.secondary {
                     cx.stop_propagation();
-                    this.run(window, cx);
+                    this.run(false, window, cx);
                 }
+            }))
+            .capture_action(cx.listener(|this, _: &RunAll, window, cx| {
+                cx.stop_propagation();
+                this.run(true, window, cx);
             }))
             .child(toolbar)
             .child(

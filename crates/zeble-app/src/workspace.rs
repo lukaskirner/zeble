@@ -39,6 +39,7 @@ const CONTEXT: &str = "ConnectionWindow";
 
 pub fn init(cx: &mut App) {
     crate::grid::init(cx);
+    crate::query_tab::init(cx);
     cx.bind_keys([
         KeyBinding::new(keys("mod-t"), NewQueryTab, Some(CONTEXT)),
         KeyBinding::new(keys("mod-w"), CloseTab, Some(CONTEXT)),
@@ -202,8 +203,7 @@ impl ConnectionWindow {
     }
 
     fn activate(&mut self, ix: usize, cx: &mut Context<Self>) {
-        self.active =
-            (!self.tabs.is_empty()).then(|| ix.min(self.tabs.len() - 1));
+        self.active = (!self.tabs.is_empty()).then(|| ix.min(self.tabs.len() - 1));
         let key = self
             .active
             .and_then(|i| self.tabs.get(i))
