@@ -127,7 +127,7 @@ pub fn describe(e: &tokio_postgres::Error) -> String {
     if let Some(db) = e.as_db_error() {
         let mut s = db.message().to_string();
         if let Some(detail) = db.detail() {
-            s.push_str("\n");
+            s.push('\n');
             s.push_str(detail);
         }
         if let Some(hint) = db.hint() {
@@ -149,7 +149,11 @@ pub fn describe(e: &tokio_postgres::Error) -> String {
 pub(crate) fn pg_err(e: tokio_postgres::Error) -> anyhow::Error {
     let closed = e.is_closed();
     let err = anyhow!(describe(&e));
-    if closed { err.context(ConnectionLost) } else { err }
+    if closed {
+        err.context(ConnectionLost)
+    } else {
+        err
+    }
 }
 
 fn pool_err(e: PoolError) -> anyhow::Error {
@@ -168,6 +172,16 @@ impl std::fmt::Display for ConnectionLost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Connection lost")
     }
+}
+
+/// The error's message chain for display, without the `ConnectionLost` marker.
+pub fn error_text(err: &anyhow::Error) -> String {
+    err.chain()
+        // Context layers show up as their Display text in the chain.
+        .filter(|e| e.to_string() != ConnectionLost.to_string())
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 /// True when `err` means the connection is gone rather than a failed query.

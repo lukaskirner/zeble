@@ -27,8 +27,17 @@ pub enum SidebarEvent {
 
 #[derive(Clone)]
 enum Row {
-    Schema { name: SharedString, count: usize, expanded: bool },
-    Group { key: String, label: &'static str, count: usize, expanded: bool },
+    Schema {
+        name: SharedString,
+        count: usize,
+        expanded: bool,
+    },
+    Group {
+        key: String,
+        label: &'static str,
+        count: usize,
+        expanded: bool,
+    },
     Object(DbObject),
 }
 
@@ -203,7 +212,11 @@ impl Sidebar {
             .text_color(theme.muted_foreground)
         };
         match row.clone() {
-            Row::Schema { name, count, expanded } => base
+            Row::Schema {
+                name,
+                count,
+                expanded,
+            } => base
                 .pl_1()
                 .child(chevron(expanded))
                 .child(
@@ -218,11 +231,14 @@ impl Sidebar {
                         .text_color(theme.muted_foreground)
                         .child(count.to_string()),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.toggle(format!("s:{name}"), cx)
-                }))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle(format!("s:{name}"), cx)))
                 .into_any_element(),
-            Row::Group { key, label, count, expanded } => base
+            Row::Group {
+                key,
+                label,
+                count,
+                expanded,
+            } => base
                 .pl_5()
                 .child(chevron(expanded))
                 .child(
@@ -252,19 +268,15 @@ impl Sidebar {
                         d.bg(theme.sidebar_accent)
                             .text_color(theme.sidebar_accent_foreground)
                     })
-                    .child(
-                        kind_icon(obj.kind)
-                            .small()
-                            .text_color(if active {
-                                theme.sidebar_accent_foreground
-                            } else {
-                                theme.muted_foreground
-                            }),
-                    )
-                    .child(div().flex_1().truncate().child(obj.display_name()))
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(SidebarEvent::Open(open.clone()))
+                    .child(kind_icon(obj.kind).small().text_color(if active {
+                        theme.sidebar_accent_foreground
+                    } else {
+                        theme.muted_foreground
                     }))
+                    .child(div().flex_1().truncate().child(obj.display_name()))
+                    .on_click(
+                        cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::Open(open.clone()))),
+                    )
                     .context_menu(move |menu, _, _| {
                         let o1 = menu_obj.clone();
                         let o2 = menu_obj.clone();
@@ -292,6 +304,7 @@ impl Render for Sidebar {
         let has_catalog = session.catalog.is_some();
         let object_count = session.catalog.as_ref().map_or(0, |c| c.objects.len());
         let connected = session.is_connected();
+        let connecting = matches!(session.status, crate::session::ConnStatus::Connecting);
 
         v_flex()
             .size_full()
@@ -330,58 +343,53 @@ impl Render for Sidebar {
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::NewQuery))),
                     ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .p_1()
-                    .map(|d| {
-                        if let Some(err) = error.filter(|_| !has_catalog) {
-                            d.child(
-                                div()
-                                    .p_2()
-                                    .text_xs()
-                                    .text_color(theme.danger)
-                                    .child(err),
-                            )
-                        } else if !has_catalog {
-                            d.child(
-                                h_flex()
-                                    .p_3()
-                                    .gap_2()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .when(loading || !connected, |d| d.child(Spinner::new().small()))
-                                    .child(if connected { "Loading schema…" } else { "Waiting for connection…" }),
-                            )
-                        } else if self.rows.is_empty() {
-                            d.child(
-                                div()
-                                    .p_3()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .child("No matching objects"),
-                            )
-                        } else {
-                            d.child(
-                                uniform_list(
-                                    "sidebar-rows",
-                                    self.rows.len(),
-                                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                                        range
-                                            .map(|ix| {
-                                                let row = this.rows[ix].clone();
-                                                this.render_row(ix, &row, cx)
-                                            })
-                                            .collect()
-                                    }),
-                                )
-                                .size_full()
-                                .track_scroll(&self.scroll),
-                            )
-                        }
-                    }),
-            )
+            .child(div().flex_1().min_h_0().p_1().map(|d| {
+                if let Some(err) = error.filter(|_| !has_catalog) {
+                    d.child(div().p_2().text_xs().text_color(theme.danger).child(err))
+                } else if !has_catalog {
+                    let (spin, text) = if connected {
+                        (true, "Loading schema…")
+                    } else if connecting {
+                        (true, "Connecting…")
+                    } else {
+                        (false, "Not connected")
+                    };
+                    d.child(
+                        h_flex()
+                            .p_3()
+                            .gap_2()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .when(spin, |d| d.child(Spinner::new().small()))
+                            .child(text),
+                    )
+                } else if self.rows.is_empty() {
+                    d.child(
+                        div()
+                            .p_3()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("No matching objects"),
+                    )
+                } else {
+                    d.child(
+                        uniform_list(
+                            "sidebar-rows",
+                            self.rows.len(),
+                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range
+                                    .map(|ix| {
+                                        let row = this.rows[ix].clone();
+                                        this.render_row(ix, &row, cx)
+                                    })
+                                    .collect()
+                            }),
+                        )
+                        .size_full()
+                        .track_scroll(&self.scroll),
+                    )
+                }
+            }))
             .child(
                 div()
                     .px_3()

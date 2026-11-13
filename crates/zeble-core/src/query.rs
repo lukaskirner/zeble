@@ -146,9 +146,23 @@ async fn run_simple(client: &Client, sql: &str, row_cap: usize) -> RunOutput {
 }
 
 impl QuerySession {
-    /// Run everything in `sql` (one or more statements) on this session.
+    /// Run every statement in `sql` on this session, one after another,
+    /// stopping at the first error. Each statement autocommits unless a
+    /// transaction block is open.
     pub async fn run(&self, sql: &str) -> RunOutput {
-        let mut out = run_simple(&self.client, sql, MAX_RESULT_ROWS).await;
+        let started = Instant::now();
+        let mut out = RunOutput::default();
+        for (offset, stmt) in crate::split::split_statements(sql) {
+            let mut one = run_simple(&self.client, stmt, MAX_RESULT_ROWS).await;
+            out.statements.append(&mut one.statements);
+            if let Some(mut err) = one.error {
+                // Point the position into the whole script.
+                err.position = err.position.map(|p| sql[..offset].chars().count() + p);
+                out.error = Some(err);
+                break;
+            }
+        }
+        out.elapsed = started.elapsed();
         out.in_transaction = self.in_transaction().await;
         out
     }
@@ -164,9 +178,9 @@ impl QuerySession {
             .simple_query("SELECT now() <> statement_timestamp()")
             .await
         {
-            Ok(msgs) => msgs.iter().any(|m| {
-                matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t"))
-            }),
+            Ok(msgs) => msgs
+                .iter()
+                .any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t"))),
             Err(e) => e
                 .as_db_error()
                 .is_some_and(|db| db.code().code() == "25P02"),
@@ -196,7 +210,10 @@ pub async fn fetch_page(client: &Client, query: &PageQuery) -> anyhow::Result<Re
 pub async fn count_rows(client: &Client, schema: &str, name: &str) -> anyhow::Result<u64> {
     let row = client
         .query_one(
-            &format!("SELECT count(*) FROM {}", crate::sql::qualified(schema, name)),
+            &format!(
+                "SELECT count(*) FROM {}",
+                crate::sql::qualified(schema, name)
+            ),
             &[],
         )
         .await

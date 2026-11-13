@@ -11,10 +11,10 @@ use anyhow::anyhow;
 use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use parking_lot::Mutex;
 use zeble_core::{
-    Canceller, ConnectionConfig, Db, is_connection_lost,
-    introspect::{Catalog, load_catalog},
+    Canceller, ConnectionConfig, Db,
     db::PooledClient,
-    pooled_canceller,
+    introspect::{Catalog, load_catalog},
+    is_connection_lost, pooled_canceller,
 };
 
 use crate::util::on_db;
@@ -105,7 +105,9 @@ impl Session {
                         cx.emit(SessionEvent::Connected);
                         this.load_catalog(cx);
                     }
-                    Err(e) => this.status = ConnStatus::Error(format!("{e:#}").into()),
+                    Err(e) => {
+                        this.status = ConnStatus::Error(zeble_core::db::error_text(&e).into())
+                    }
                 }
                 cx.notify();
             })
@@ -129,7 +131,7 @@ impl Session {
                         this.catalog = Some(Arc::new(catalog));
                         this.catalog_error = None;
                     }
-                    Err(e) => this.catalog_error = Some(format!("{e:#}").into()),
+                    Err(e) => this.catalog_error = Some(zeble_core::db::error_text(&e).into()),
                 }
                 cx.emit(SessionEvent::CatalogChanged);
                 cx.notify();
@@ -204,7 +206,7 @@ impl Session {
     /// Mark the connection as dropped when an error says so.
     pub fn note_error(&mut self, err: &anyhow::Error, cx: &mut Context<Self>) {
         if is_connection_lost(err) && self.is_connected() {
-            self.status = ConnStatus::Disconnected(format!("{err:#}").into());
+            self.status = ConnStatus::Disconnected(zeble_core::db::error_text(err).into());
             cx.notify();
         }
     }
@@ -255,4 +257,3 @@ impl Drop for Session {
         }
     }
 }
-

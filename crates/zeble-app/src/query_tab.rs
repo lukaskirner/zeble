@@ -74,7 +74,10 @@ impl QueryTab {
                 .default_value(sql)
         });
         let grid = new_grid(GridDelegate::new(), window, cx);
-        grid.update(cx, |g, _| g.delegate_mut().set_empty_text("Run a query to see results"));
+        grid.update(cx, |g, _| {
+            g.delegate_mut()
+                .set_empty_text("Run a query to see results")
+        });
         let subscriptions = vec![cx.subscribe(&editor, |_, _, ev: &InputEvent, cx| {
             if let InputEvent::Change = ev {
                 cx.emit(QueryTabEvent::Changed);
@@ -148,7 +151,9 @@ impl QueryTab {
                 first_line
             }
         );
-        let activity = self.session.update(cx, |s, cx| s.begin(label, slot.clone(), cx));
+        let activity = self
+            .session
+            .update(cx, |s, cx| s.begin(label, slot.clone(), cx));
         let work = on_db(async move {
             let conn = match existing {
                 Some(c) => c,
@@ -181,7 +186,7 @@ impl QueryTab {
                         this.show_output(
                             RunOutput {
                                 error: Some(zeble_core::query::QueryError {
-                                    message: format!("{e:#}"),
+                                    message: zeble_core::db::error_text(&e),
                                     connection_lost: true,
                                     ..Default::default()
                                 }),
@@ -229,10 +234,10 @@ impl QueryTab {
             g.scroll_to_row(0, cx);
             g.clear_selection(cx);
         });
-        if let Some(err) = &out.error {
-            if let Some(pos) = err.position {
-                self.mark_error(pos, &err.message, window, cx);
-            }
+        if let Some(err) = &out.error
+            && let Some(pos) = err.position
+        {
+            self.mark_error(pos, &err.message, window, cx);
         }
         self.result_view = if has_rows || out.statements.is_empty() {
             ResultView::Results
@@ -253,7 +258,13 @@ impl QueryTab {
     }
 
     /// Underline the word at `char_pos` (into the SQL that ran).
-    fn mark_error(&mut self, char_pos: usize, message: &str, _: &mut Window, cx: &mut Context<Self>) {
+    fn mark_error(
+        &mut self,
+        char_pos: usize,
+        message: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let text = self.sql(cx);
         let start_byte = self.ran_from
             + text[self.ran_from..]
@@ -275,7 +286,9 @@ impl QueryTab {
         let message = message.to_string();
         self.editor.update(cx, |e, cx| {
             if let Some(d) = e.diagnostics_mut() {
-                d.push(Diagnostic::new(start..end, message).with_severity(DiagnosticSeverity::Error));
+                d.push(
+                    Diagnostic::new(start..end, message).with_severity(DiagnosticSeverity::Error),
+                );
             }
             cx.notify();
         });
@@ -339,7 +352,11 @@ impl QueryTab {
                 TabBar::new("result-view")
                     .segmented()
                     .xsmall()
-                    .selected_index(if self.result_view == ResultView::Results { 0 } else { 1 })
+                    .selected_index(if self.result_view == ResultView::Results {
+                        0
+                    } else {
+                        1
+                    })
                     .child(Tab::new().label("Results"))
                     .child(Tab::new().label("Messages"))
                     .on_click(cx.listener(|this, ix: &usize, _, cx| {
@@ -388,11 +405,11 @@ impl QueryTab {
                 div().child(format!("{}. {} · {}", i + 1, what, duration(st.elapsed)))
             }))
             .when_some(out.error.as_ref(), |d, e| {
-                d.child(
-                    div()
-                        .text_color(theme.danger)
-                        .child(format!("{}. ERROR: {}", out.statements.len() + 1, e.message)),
-                )
+                d.child(div().text_color(theme.danger).child(format!(
+                    "{}. ERROR: {}",
+                    out.statements.len() + 1,
+                    e.message
+                )))
             })
             .into_any_element()
     }
@@ -464,16 +481,13 @@ impl Render for QueryTab {
                 )
             })
             .child(div().flex_1())
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(if self.conn.is_some() {
-                        "Dedicated session"
-                    } else {
-                        "Session opens on first run"
-                    }),
-            );
+            .child(div().text_xs().text_color(theme.muted_foreground).child(
+                if self.conn.is_some() {
+                    "Dedicated session"
+                } else {
+                    "Session opens on first run"
+                },
+            ));
 
         let error = self.render_error(cx);
         let results = v_flex()
@@ -481,7 +495,7 @@ impl Render for QueryTab {
             .child(self.render_status(cx))
             .children(error)
             .child(div().flex_1().min_h_0().map(|d| match self.result_view {
-                ResultView::Results => d.child(grid_element(&self.grid)),
+                ResultView::Results => d.child(grid_element(&self.grid, cx)),
                 ResultView::Messages => d.child(self.render_messages(cx)),
             }));
 
@@ -503,11 +517,7 @@ impl Render for QueryTab {
                             resizable_panel()
                                 .size(px(220.))
                                 .size_range(px(80.)..Pixels::MAX)
-                                .child(
-                                    Editor::new(&self.editor)
-                                        .bordered(false)
-                                        .h_full(),
-                                ),
+                                .child(Editor::new(&self.editor).bordered(false).h_full()),
                         )
                         .child(resizable_panel().child(results)),
                 ),

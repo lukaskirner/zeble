@@ -4,10 +4,24 @@ use std::borrow::Cow;
 
 use gpui_kit::{AssetSource, Result, SharedString};
 
-gpui_kit::assets::icon_assets!(ZebleIcons, [
-    Table, Database, Layers, SquareFunction, Workflow, Hash, ListOrdered, Type, Braces,
-    ArrowLeftRight, Columns3, SquareStop, Globe,
-]);
+gpui_kit::assets::icon_assets!(
+    ZebleIcons,
+    [
+        Table,
+        Database,
+        Layers,
+        SquareFunction,
+        Workflow,
+        Hash,
+        ListOrdered,
+        Type,
+        Braces,
+        ArrowLeftRight,
+        Columns3,
+        SquareStop,
+        Globe,
+    ]
+);
 
 pub struct AppAssets;
 

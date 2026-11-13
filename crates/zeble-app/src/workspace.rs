@@ -30,7 +30,10 @@ use crate::{
     util::{color_tag, duration, keys},
 };
 
-actions!(workspace, [NewQueryTab, CloseTab, RefreshSchema, NextTab, PrevTab]);
+actions!(
+    workspace,
+    [NewQueryTab, CloseTab, RefreshSchema, NextTab, PrevTab]
+);
 
 const CONTEXT: &str = "ConnectionWindow";
 
@@ -199,7 +202,8 @@ impl ConnectionWindow {
     }
 
     fn activate(&mut self, ix: usize, cx: &mut Context<Self>) {
-        self.active = Some(ix.min(self.tabs.len().saturating_sub(1))).filter(|_| !self.tabs.is_empty());
+        self.active =
+            (!self.tabs.is_empty()).then(|| ix.min(self.tabs.len() - 1));
         let key = self
             .active
             .and_then(|i| self.tabs.get(i))
@@ -237,9 +241,10 @@ impl ConnectionWindow {
         self.query_counter += 1;
         let session = self.session.clone();
         let tab = cx.new(|cx| QueryTab::new(session, title, sql, window, cx));
-        self._subscriptions.push(cx.subscribe(&tab, |this, _, ev, cx| match ev {
-            QueryTabEvent::Changed => this.schedule_save(cx),
-        }));
+        self._subscriptions
+            .push(cx.subscribe(&tab, |this, _, ev, cx| match ev {
+                QueryTabEvent::Changed => this.schedule_save(cx),
+            }));
         self.push_tab(TabContent::Query(tab.clone()), cx);
         tab
     }
@@ -310,31 +315,31 @@ impl ConnectionWindow {
         let Some(tab) = self.tabs.get(ix).cloned() else {
             return;
         };
-        if let TabContent::Query(q) = &tab.content {
-            if q.read(cx).in_transaction {
-                let weak = cx.entity().downgrade();
-                let tab_id = tab.id;
-                let title = q.read(cx).title.clone();
-                window.open_alert_dialog(cx, move |alert, _, _| {
-                    let weak = weak.clone();
-                    alert
-                        .title(format!("\"{title}\" has an open transaction"))
-                        .description("Closing the tab rolls the transaction back.")
-                        .confirm()
-                        .ok_text("Roll Back and Close")
-                        .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
-                        .on_ok(move |_, _, cx| {
-                            weak.update(cx, |this, cx| {
-                                if let Some(ix) = this.tabs.iter().position(|t| t.id == tab_id) {
-                                    this.remove_tab(ix, cx);
-                                }
-                            })
-                            .ok();
-                            true
+        if let TabContent::Query(q) = &tab.content
+            && q.read(cx).in_transaction
+        {
+            let weak = cx.entity().downgrade();
+            let tab_id = tab.id;
+            let title = q.read(cx).title.clone();
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                let weak = weak.clone();
+                alert
+                    .title(format!("\"{title}\" has an open transaction"))
+                    .description("Closing the tab rolls the transaction back.")
+                    .confirm()
+                    .ok_text("Roll Back and Close")
+                    .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
+                    .on_ok(move |_, _, cx| {
+                        weak.update(cx, |this, cx| {
+                            if let Some(ix) = this.tabs.iter().position(|t| t.id == tab_id) {
+                                this.remove_tab(ix, cx);
+                            }
                         })
-                });
-                return;
-            }
+                        .ok();
+                        true
+                    })
+            });
+            return;
         }
         self.remove_tab(ix, cx);
     }
@@ -412,9 +417,10 @@ impl ConnectionWindow {
         let config = &session.config;
         let (dot, status_text): (Hsla, SharedString) = match &session.status {
             ConnStatus::Connecting => (theme.warning, "Connecting…".into()),
-            ConnStatus::Connected { version } => {
-                (theme.success, format!("Connected · PostgreSQL {version}").into())
-            }
+            ConnStatus::Connected { version } => (
+                theme.success,
+                format!("Connected · PostgreSQL {version}").into(),
+            ),
             ConnStatus::Disconnected(msg) => (
                 theme.muted_foreground,
                 format!("Disconnected · {msg}").into(),
@@ -655,11 +661,9 @@ impl Render for ConnectionWindow {
                                     .when(!self.tabs.is_empty(), |d| {
                                         d.child(self.render_tab_bar(cx))
                                     })
-                                    .child(div().flex_1().min_h_0().map(|d| {
-                                        match active_view {
-                                            Some(v) => d.child(v),
-                                            None => d.child(self.render_empty(cx)),
-                                        }
+                                    .child(div().flex_1().min_h_0().map(|d| match active_view {
+                                        Some(v) => d.child(v),
+                                        None => d.child(self.render_empty(cx)),
                                     })),
                             ),
                         ),

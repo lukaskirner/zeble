@@ -87,15 +87,18 @@ impl RelationTab {
             )
         });
         let subscriptions = vec![
-            cx.subscribe(&page_size_select, |this, _, ev: &SelectEvent<Vec<SharedString>>, cx| {
-                if let SelectEvent::Confirm(Some(v)) = ev {
-                    if let Ok(size) = v.parse::<usize>() {
+            cx.subscribe(
+                &page_size_select,
+                |this, _, ev: &SelectEvent<Vec<SharedString>>, cx| {
+                    if let SelectEvent::Confirm(Some(v)) = ev
+                        && let Ok(size) = v.parse::<usize>()
+                    {
                         this.page_size = size;
                         this.page = 0;
                         this.load_page(cx);
                     }
-                }
-            }),
+                },
+            ),
             cx.subscribe(&session, |this, _, ev, cx| {
                 if let SessionEvent::Connected = ev {
                     this.reload(cx);
@@ -162,12 +165,13 @@ impl RelationTab {
                             .collect();
                         this.definition = None;
                         this.info = Some(Arc::new(info));
-                        this.grid.update(cx, |g, _| g.delegate_mut().set_columns(columns));
+                        this.grid
+                            .update(cx, |g, _| g.delegate_mut().set_columns(columns));
                         this.load_page(cx);
                     }
                     Err(e) => {
                         this.loading = false;
-                        this.info_error = Some(format!("{e:#}").into());
+                        this.info_error = Some(zeble_core::db::error_text(&e).into());
                         this.grid.update(cx, |g, cx| {
                             g.delegate_mut().loading = false;
                             cx.notify();
@@ -196,7 +200,10 @@ impl RelationTab {
             name: self.object.name.clone(),
             sort: self.sort.and_then(|(ix, asc)| {
                 info.columns.get(ix).map(|c| {
-                    (c.name.clone(), if asc { SortDir::Asc } else { SortDir::Desc })
+                    (
+                        c.name.clone(),
+                        if asc { SortDir::Asc } else { SortDir::Desc },
+                    )
                 })
             }),
             stable,
@@ -251,7 +258,7 @@ impl RelationTab {
                         });
                     }
                     Err(e) => {
-                        this.load_error = Some(format!("{e:#}").into());
+                        this.load_error = Some(zeble_core::db::error_text(&e).into());
                         this.grid.update(cx, |g, cx| {
                             g.delegate_mut().loading = false;
                             cx.notify();
@@ -286,9 +293,11 @@ impl RelationTab {
         let (schema, name) = (self.object.schema.clone(), self.object.name.clone());
         self.counting = true;
         let task = self.session.update(cx, |s, cx| {
-            s.with_client(format!("Counting rows of {name}…"), cx, move |client| async move {
-                count_rows(&client, &schema, &name).await
-            })
+            s.with_client(
+                format!("Counting rows of {name}…"),
+                cx,
+                move |client| async move { count_rows(&client, &schema, &name).await },
+            )
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -296,7 +305,7 @@ impl RelationTab {
                 this.counting = false;
                 match result {
                     Ok(n) => this.exact_count = Some(n),
-                    Err(e) => this.load_error = Some(format!("{e:#}").into()),
+                    Err(e) => this.load_error = Some(zeble_core::db::error_text(&e).into()),
                 }
                 cx.notify();
             })
@@ -357,7 +366,7 @@ impl RelationTab {
                     .text_color(theme.muted_foreground)
                     .child(format!("{rows_text}{total_text}")),
             )
-            .when(self.exact_count.is_none(), |d| {
+            .when(self.exact_count.is_none() && self.info.is_some(), |d| {
                 d.child(
                     Button::new("count")
                         .xsmall()
@@ -387,7 +396,11 @@ impl RelationTab {
                             .text_color(theme.muted_foreground)
                             .child("Page size"),
                     )
-                    .child(div().w_24().child(Select::new(&self.page_size_select).xsmall())),
+                    .child(
+                        div()
+                            .w_24()
+                            .child(Select::new(&self.page_size_select).xsmall()),
+                    ),
             )
             .child(
                 Button::new("prev-page")
@@ -440,15 +453,30 @@ impl RelationTab {
             return div().into_any_element();
         };
         let columns = simple_table(
-            &[("", 0.4), ("Column", 2.), ("Type", 2.), ("Nullable", 0.8), ("Default", 2.5), ("Comment", 2.)],
+            &[
+                ("", 0.4),
+                ("Column", 2.),
+                ("Type", 2.),
+                ("Nullable", 0.8),
+                ("Default", 2.5),
+                ("Comment", 2.),
+            ],
             info.columns
                 .iter()
                 .map(|c| {
                     vec![
-                        if c.primary_key { "PK".to_string() } else { String::new() },
+                        if c.primary_key {
+                            "PK".to_string()
+                        } else {
+                            String::new()
+                        },
                         c.name.clone(),
                         c.data_type.clone(),
-                        if c.nullable { "YES".into() } else { "NO".into() },
+                        if c.nullable {
+                            "YES".into()
+                        } else {
+                            "NO".into()
+                        },
                         c.default.clone().unwrap_or_default(),
                         c.comment.clone().unwrap_or_default(),
                     ]
@@ -484,16 +512,17 @@ impl RelationTab {
             .p_4()
             .gap_5()
             .when_some(info.comment.clone(), |d, c| {
-                d.child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(c),
-                )
+                d.child(div().text_sm().text_color(theme.muted_foreground).child(c))
             })
-            .child(section(format!("Columns ({})", info.columns.len()), columns))
+            .child(section(
+                format!("Columns ({})", info.columns.len()),
+                columns,
+            ))
             .when(!info.indexes.is_empty(), |d| {
-                d.child(section(format!("Indexes ({})", info.indexes.len()), indexes))
+                d.child(section(
+                    format!("Indexes ({})", info.indexes.len()),
+                    indexes,
+                ))
             })
             .when(!info.constraints.is_empty(), |d| {
                 d.child(section(
@@ -552,20 +581,14 @@ pub fn simple_table<T>(
                 .text_color(theme.muted_foreground)
                 .border_b_1()
                 .border_color(theme.border)
-                .children(
-                    headers
-                        .iter()
-                        .map(|(h, w)| cell(h.to_string(), *w)),
-                ),
+                .children(headers.iter().map(|(h, w)| cell(h.to_string(), *w))),
         )
         .children(rows.into_iter().enumerate().map(move |(i, r)| {
             h_flex()
-                .when(i > 0, |d| d.border_t_1().border_color(theme.border.opacity(0.5)))
-                .children(
-                    r.into_iter()
-                        .zip(weights.iter())
-                        .map(|(t, w)| cell(t, *w)),
-                )
+                .when(i > 0, |d| {
+                    d.border_t_1().border_color(theme.border.opacity(0.5))
+                })
+                .children(r.into_iter().zip(weights.iter()).map(|(t, w)| cell(t, *w)))
         }))
 }
 
@@ -587,7 +610,11 @@ impl Render for RelationTab {
                     .child(Tab::new().label("Data"))
                     .child(Tab::new().label("Structure"))
                     .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        this.view = if *ix == 0 { View::Data } else { View::Structure };
+                        this.view = if *ix == 0 {
+                            View::Data
+                        } else {
+                            View::Structure
+                        };
                         cx.notify();
                     })),
             )
@@ -631,15 +658,10 @@ impl Render for RelationTab {
                         .child(err),
                 )
             })
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .map(|d| match view {
-                        View::Data => d.child(grid_element(&self.grid)),
-                        View::Structure => d.child(self.render_structure(window, cx)),
-                    }),
-            )
+            .child(div().flex_1().min_h_0().map(|d| match view {
+                View::Data => d.child(grid_element(&self.grid, cx)),
+                View::Structure => d.child(self.render_structure(window, cx)),
+            }))
             .when(view == View::Data, |d| d.child(self.render_pager(cx)))
     }
 }

@@ -52,7 +52,10 @@ fn catalog_lists_every_kind() {
         assert_eq!(find("public", "users"), ObjectKind::Table);
         assert_eq!(find("public", "event_log"), ObjectKind::Table);
         assert_eq!(find("public", "active_admins"), ObjectKind::View);
-        assert_eq!(find("shop", "revenue_by_status"), ObjectKind::MaterializedView);
+        assert_eq!(
+            find("shop", "revenue_by_status"),
+            ObjectKind::MaterializedView
+        );
         assert_eq!(find("public", "user_order_count"), ObjectKind::Function);
         assert_eq!(find("shop", "cancel_order"), ObjectKind::Procedure);
         assert_eq!(find("public", "invoice_no"), ObjectKind::Sequence);
@@ -61,7 +64,12 @@ fn catalog_lists_every_kind() {
         assert_eq!(find("shop", "address"), ObjectKind::Composite);
         assert!(!catalog.objects.iter().any(|o| o.schema == "pg_catalog"));
         // Row types of tables are not listed as composite types.
-        assert!(!catalog.objects.iter().any(|o| o.kind == ObjectKind::Composite && o.name == "users"));
+        assert!(
+            !catalog
+                .objects
+                .iter()
+                .any(|o| o.kind == ObjectKind::Composite && o.name == "users")
+        );
     });
 }
 
@@ -76,7 +84,14 @@ fn relation_structure_and_paging() {
         assert_eq!(info.columns[0].name, "id");
         assert!(info.columns[0].primary_key);
         assert!(info.columns[0].is_numeric());
-        assert!(!info.columns.iter().find(|c| c.name == "email").unwrap().nullable);
+        assert!(
+            !info
+                .columns
+                .iter()
+                .find(|c| c.name == "email")
+                .unwrap()
+                .nullable
+        );
         assert!(info.indexes.iter().any(|i| i.primary));
         assert!(info.constraints.iter().any(|c| c.kind == "UNIQUE"));
         assert_eq!(info.comment.as_deref(), Some("Application users"));
@@ -94,23 +109,53 @@ fn relation_structure_and_paging() {
         assert_eq!(page.columns[0], "id");
         assert_eq!(page.rows[0][0].as_deref(), Some("1845"));
         // NULL names (every 7th user) arrive as None, bytea as hex text.
-        let all = fetch_page(&client, &PageQuery { page: 0, page_size: 5000, sort: None, ..q }).await.unwrap();
+        let all = fetch_page(
+            &client,
+            &PageQuery {
+                page: 0,
+                page_size: 5000,
+                sort: None,
+                ..q
+            },
+        )
+        .await
+        .unwrap();
         assert!(all.rows.iter().any(|r| r[2].is_none()));
-        assert!(all.rows.iter().any(|r| r[5].as_deref().is_some_and(|v| v.starts_with("\\x"))));
+        assert!(
+            all.rows
+                .iter()
+                .any(|r| r[5].as_deref().is_some_and(|v| v.starts_with("\\x")))
+        );
         assert_eq!(count_rows(&client, "public", "users").await.unwrap(), 2345);
 
         let orders = catalog.objects.iter().find(|o| o.name == "orders").unwrap();
         let info = load_relation(&**client, orders.oid).await.unwrap();
-        assert!(info.constraints.iter().any(|c| c.kind == "FOREIGN KEY" && c.definition.contains("REFERENCES users(id)")));
+        assert!(
+            info.constraints
+                .iter()
+                .any(|c| c.kind == "FOREIGN KEY" && c.definition.contains("REFERENCES users(id)"))
+        );
 
-        let log = catalog.objects.iter().find(|o| o.name == "event_log").unwrap();
+        let log = catalog
+            .objects
+            .iter()
+            .find(|o| o.name == "event_log")
+            .unwrap();
         let info = load_relation(&**client, log.oid).await.unwrap();
         assert!(info.primary_key.is_empty() && info.has_ctid);
 
-        let view = catalog.objects.iter().find(|o| o.name == "active_admins").unwrap();
+        let view = catalog
+            .objects
+            .iter()
+            .find(|o| o.name == "active_admins")
+            .unwrap();
         let info = load_relation(&**client, view.oid).await.unwrap();
         assert!(!info.has_ctid);
-        assert!(info.view_definition.unwrap().starts_with("CREATE VIEW public.active_admins AS"));
+        assert!(
+            info.view_definition
+                .unwrap()
+                .starts_with("CREATE VIEW public.active_admins AS")
+        );
     });
 }
 
@@ -119,17 +164,35 @@ fn object_details() {
     with_db(config(), |db| async move {
         let client = db.client().await.unwrap();
         let catalog = load_catalog(&**client).await.unwrap();
-        let get = |name: &str| catalog.objects.iter().find(|o| o.name == name).unwrap().clone();
+        let get = |name: &str| {
+            catalog
+                .objects
+                .iter()
+                .find(|o| o.name == name)
+                .unwrap()
+                .clone()
+        };
 
-        let f = load_object_detail(&**client, &get("user_order_count")).await.unwrap();
-        assert!(f.definition.contains("CREATE OR REPLACE FUNCTION public.user_order_count"));
-        let e = load_object_detail(&**client, &get("order_status")).await.unwrap();
+        let f = load_object_detail(&**client, &get("user_order_count"))
+            .await
+            .unwrap();
+        assert!(
+            f.definition
+                .contains("CREATE OR REPLACE FUNCTION public.user_order_count")
+        );
+        let e = load_object_detail(&**client, &get("order_status"))
+            .await
+            .unwrap();
         assert!(e.definition.contains("'pending'"));
-        let s = load_object_detail(&**client, &get("invoice_no")).await.unwrap();
+        let s = load_object_detail(&**client, &get("invoice_no"))
+            .await
+            .unwrap();
         assert!(s.definition.contains("INCREMENT BY 5"));
         let d = load_object_detail(&**client, &get("email")).await.unwrap();
         assert!(d.definition.starts_with("CREATE DOMAIN shop.email AS text"));
-        let c = load_object_detail(&**client, &get("address")).await.unwrap();
+        let c = load_object_detail(&**client, &get("address"))
+            .await
+            .unwrap();
         assert!(c.definition.contains("street text"));
     });
 }
@@ -153,10 +216,16 @@ fn query_session_statements_transactions_errors() {
         let out = s.run("SELCT oops").await;
         let err = out.error.unwrap();
         assert_eq!(err.position, Some(0));
-        assert!(out.in_transaction, "aborted transaction still counts as open");
+        assert!(
+            out.in_transaction,
+            "aborted transaction still counts as open"
+        );
         s.rollback().await.unwrap();
         let out = s.run("SELECT count(*) FROM t").await;
-        assert_eq!(out.last_result().unwrap().result.as_ref().unwrap().rows[0][0].as_deref(), Some("2"));
+        assert_eq!(
+            out.last_result().unwrap().result.as_ref().unwrap().rows[0][0].as_deref(),
+            Some("2")
+        );
         assert!(!out.in_transaction);
 
         // Results are capped.
@@ -195,7 +264,9 @@ fn read_only_connections_reject_writes() {
     c.read_only = true;
     with_db(c, |db| async move {
         let s = db.open_session().await.unwrap();
-        let out = s.run("CREATE TEMP TABLE x(a int); INSERT INTO public.event_log(kind) VALUES ('x')").await;
+        let out = s
+            .run("CREATE TEMP TABLE x(a int); INSERT INTO public.event_log(kind) VALUES ('x')")
+            .await;
         assert_eq!(out.error.unwrap().code.as_deref(), Some("25006"));
     });
 }
@@ -210,5 +281,22 @@ fn bad_credentials_give_a_readable_error() {
         }
         let err = Db::test(&c).await.unwrap_err().to_string();
         assert!(err.contains("password authentication failed"), "{err}");
+    });
+}
+
+#[test]
+fn per_statement_timing() {
+    with_db(config(), |db| async move {
+        let s = db.open_session().await.unwrap();
+        let out = s.run("SELECT 1; SELECT pg_sleep(0.4); SELECT 2").await;
+        let t: Vec<_> = out
+            .statements
+            .iter()
+            .map(|s| s.elapsed.as_millis())
+            .collect();
+        eprintln!("timings: {t:?}");
+        assert!(t[0] < 200, "{t:?}");
+        assert!(t[1] >= 350, "{t:?}");
+        assert!(t[2] < 200, "{t:?}");
     });
 }

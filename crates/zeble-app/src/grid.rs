@@ -221,7 +221,12 @@ impl TableDelegate for GridDelegate {
     }
 
     fn cell_label(&self, row_ix: usize, col_ix: usize, _: &App) -> Option<SharedString> {
-        Some(self.value(row_ix, col_ix).unwrap_or("NULL").to_string().into())
+        Some(
+            self.value(row_ix, col_ix)
+                .unwrap_or("NULL")
+                .to_string()
+                .into(),
+        )
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
@@ -284,12 +289,35 @@ pub fn copy_selection(table: &Entity<TableState<GridDelegate>>, cx: &mut App) {
     }
 }
 
-/// Wrap a `DataTable` so Cmd/Ctrl+C copies the selection.
-pub fn grid_element(table: &Entity<TableState<GridDelegate>>) -> impl IntoElement {
+/// Wrap a `DataTable` so Cmd/Ctrl+C copies the selection. A grid without
+/// columns shows only its empty text, not an empty header row.
+pub fn grid_element(table: &Entity<TableState<GridDelegate>>, cx: &App) -> AnyElement {
+    let delegate = table.read(cx).delegate();
+    if delegate.columns.is_empty() {
+        let theme = cx.theme();
+        return h_flex()
+            .size_full()
+            .justify_center()
+            .gap_2()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .when(!delegate.loading, |d| {
+                d.child(Icon::new(IconName::Inbox))
+                    .child(delegate.empty_text.clone())
+            })
+            .into_any_element();
+    }
     let t = table.clone();
+    let focus = table.clone();
     div()
         .key_context(CONTEXT)
         .size_full()
+        // The table does not take focus on click; it must, so keyboard
+        // navigation and Cmd/Ctrl+C reach it.
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            let handle = focus.read(cx).focus_handle(cx);
+            handle.focus(window, cx);
+        })
         .on_action(move |_: &CopySelection, _, cx| copy_selection(&t, cx))
         .child(
             gpui_kit::component::table::DataTable::new(table)
@@ -297,4 +325,48 @@ pub fn grid_element(table: &Entity<TableState<GridDelegate>>) -> impl IntoElemen
                 .bordered(false)
                 .header_row_height(px(42.)),
         )
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: GPUI exports its own `test` attribute.
+    use super::{GridColumn, GridDelegate};
+    use gpui_kit::component::table::TableSelection;
+    use std::sync::Arc;
+
+    #[test]
+    fn selection_text_for_cells_rows_columns() {
+        let mut g = GridDelegate::new();
+        g.set_columns(vec![
+            GridColumn {
+                name: "a".into(),
+                data_type: None,
+                numeric: false,
+            },
+            GridColumn {
+                name: "b".into(),
+                data_type: None,
+                numeric: true,
+            },
+        ]);
+        g.set_rows(Arc::new(vec![
+            vec![Some("x".into()), None],
+            vec![Some("multi\nline".into()), Some("2".into())],
+        ]));
+        assert_eq!(
+            g.selection_text(TableSelection::Cell(1, 0)).unwrap(),
+            "multi\nline"
+        );
+        assert_eq!(
+            g.selection_text(TableSelection::Cell(0, 1)).unwrap(),
+            "NULL"
+        );
+        assert_eq!(g.selection_text(TableSelection::Row(0)).unwrap(), "x\tNULL");
+        assert_eq!(
+            g.selection_text(TableSelection::Column(1)).unwrap(),
+            "NULL\n2"
+        );
+        assert!(g.selection_text(TableSelection::None).is_none());
+    }
 }

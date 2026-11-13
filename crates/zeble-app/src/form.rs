@@ -10,8 +10,8 @@ use gpui_kit::component::{
     select::{Select, SelectState},
     v_flex,
 };
-use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use zeble_core::{ColorTag, ConnectionConfig, Db, SslMode};
 
 use crate::util::{color_tag, on_db};
@@ -60,14 +60,15 @@ impl ConnectionForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = |placeholder: &str, value: String, window: &mut Window, cx: &mut Context<Self>| {
-            let placeholder = SharedString::from(placeholder.to_string());
-            cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(placeholder)
-                    .default_value(value)
-            })
-        };
+        let input =
+            |placeholder: &str, value: String, window: &mut Window, cx: &mut Context<Self>| {
+                let placeholder = SharedString::from(placeholder.to_string());
+                cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(placeholder)
+                        .default_value(value)
+                })
+            };
         let url = input(
             "postgres://user:password@host:5432/database",
             String::new(),
@@ -163,9 +164,10 @@ impl ConnectionForm {
     }
 
     fn set_fields(&mut self, c: &ConnectionConfig, window: &mut Window, cx: &mut Context<Self>) {
-        let set = |s: &Entity<InputState>, v: String, window: &mut Window, cx: &mut Context<Self>| {
-            s.update(cx, |s, cx| s.set_value(v, window, cx));
-        };
+        let set =
+            |s: &Entity<InputState>, v: String, window: &mut Window, cx: &mut Context<Self>| {
+                s.update(cx, |s, cx| s.set_value(v, window, cx));
+            };
         set(&self.host, c.host.clone(), window, cx);
         set(&self.port, c.port.to_string(), window, cx);
         set(&self.user, c.user.clone(), window, cx);
@@ -192,7 +194,7 @@ impl ConnectionForm {
                 self.url.update(cx, |s, cx| s.set_value("", window, cx));
                 self.error = None;
             }
-            Err(e) => self.error = Some(format!("{e:#}").into()),
+            Err(e) => self.error = Some(zeble_core::db::error_text(&e).into()),
         }
         cx.notify();
     }
@@ -201,7 +203,7 @@ impl ConnectionForm {
         let config = match self.collect(cx) {
             Ok(c) => c,
             Err(e) => {
-                self.test = TestState::Failed(format!("{e:#}").into());
+                self.test = TestState::Failed(zeble_core::db::error_text(&e).into());
                 cx.notify();
                 return;
             }
@@ -212,8 +214,14 @@ impl ConnectionForm {
             let result = on_db(async move { Db::test(&config).await }).await;
             this.update(cx, |this, cx| {
                 this.test = match result.and_then(|r| r) {
-                    Ok(v) => TestState::Ok(format!("Connected · PostgreSQL {v}").into()),
-                    Err(e) => TestState::Failed(format!("{e:#}").into()),
+                    Ok(v) => TestState::Ok(
+                        format!(
+                            "Connected · PostgreSQL {}",
+                            v.split(" (").next().unwrap_or(&v)
+                        )
+                        .into(),
+                    ),
+                    Err(e) => TestState::Failed(zeble_core::db::error_text(&e).into()),
                 };
                 cx.notify();
             })
@@ -230,7 +238,7 @@ impl ConnectionForm {
                 self.is_new = false;
                 cx.emit(FormEvent::Saved(config));
             }
-            Err(e) => self.error = Some(format!("{e:#}").into()),
+            Err(e) => self.error = Some(zeble_core::db::error_text(&e).into()),
         }
         cx.notify();
     }
@@ -296,17 +304,15 @@ impl Render for ConnectionForm {
             .p_6()
             .gap_4()
             .child(
-                h_flex()
-                    .justify_between()
-                    .child(
-                        Label::new(if self.is_new {
-                            "New Connection"
-                        } else {
-                            "Edit Connection"
-                        })
-                        .text_lg()
-                        .font_semibold(),
-                    ),
+                h_flex().justify_between().child(
+                    Label::new(if self.is_new {
+                        "New Connection"
+                    } else {
+                        "Edit Connection"
+                    })
+                    .text_lg()
+                    .font_semibold(),
+                ),
             )
             .child(
                 v_flex()
@@ -335,19 +341,30 @@ impl Render for ConnectionForm {
                 h_flex()
                     .gap_3()
                     .child(Self::field("Host", Input::new(&self.host)).flex_grow(1.))
-                    .child(Self::field("Port", Input::new(&self.port)).w_24().flex_none()),
+                    .child(
+                        Self::field("Port", Input::new(&self.port))
+                            .w_24()
+                            .flex_none(),
+                    ),
             )
             .child(
                 h_flex()
                     .gap_3()
                     .child(Self::field("User", Input::new(&self.user)))
-                    .child(Self::field("Password", Input::new(&self.password).mask_toggle())),
+                    .child(Self::field(
+                        "Password",
+                        Input::new(&self.password).mask_toggle(),
+                    )),
             )
             .child(
                 h_flex()
                     .gap_3()
                     .child(Self::field("Database", Input::new(&self.database)))
-                    .child(Self::field("SSL mode", Select::new(&self.ssl)).w_40().flex_none()),
+                    .child(
+                        Self::field("SSL mode", Select::new(&self.ssl))
+                            .w_40()
+                            .flex_none(),
+                    ),
             )
             .child(
                 v_flex()
@@ -371,6 +388,15 @@ impl Render for ConnectionForm {
             )
             .when_some(self.error.clone(), |this, err| {
                 this.child(Label::new(err).text_sm().text_color(theme.danger))
+            })
+            .map(|this| match &self.test {
+                TestState::Idle | TestState::Testing => this,
+                TestState::Ok(msg) => {
+                    this.child(Label::new(msg.clone()).text_sm().text_color(theme.success))
+                }
+                TestState::Failed(msg) => {
+                    this.child(Label::new(msg.clone()).text_sm().text_color(theme.danger))
+                }
             })
             .child(
                 h_flex()
@@ -399,18 +425,5 @@ impl Render for ConnectionForm {
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     ),
             )
-            .map(|this| match &self.test {
-                TestState::Idle | TestState::Testing => this,
-                TestState::Ok(msg) => this.child(
-                    Label::new(msg.clone())
-                        .text_sm()
-                        .text_color(theme.success),
-                ),
-                TestState::Failed(msg) => this.child(
-                    Label::new(msg.clone())
-                        .text_sm()
-                        .text_color(theme.danger),
-                ),
-            })
     }
 }

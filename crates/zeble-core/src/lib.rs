@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod introspect;
 pub mod query;
+pub mod split;
 pub mod sql;
 pub mod store;
 

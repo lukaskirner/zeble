@@ -145,7 +145,10 @@ impl ConnectionConfig {
 
     /// `user@host:port/database`.
     pub fn summary(&self) -> String {
-        format!("{}@{}:{}/{}", self.user, self.host, self.port, self.database)
+        format!(
+            "{}@{}:{}/{}",
+            self.user, self.host, self.port, self.database
+        )
     }
 
     /// Check the fields needed to connect.
@@ -179,18 +182,30 @@ impl ConnectionConfig {
                 .map(|(_, v)| v.into_owned())
                 .unwrap_or_default()
         };
-        let host = url.host_str().unwrap_or("").trim_matches(['[', ']']).to_string();
-        self.host = if host.is_empty() { "localhost".into() } else { host };
+        let host = url
+            .host_str()
+            .unwrap_or("")
+            .trim_matches(['[', ']'])
+            .to_string();
+        self.host = if host.is_empty() {
+            "localhost".into()
+        } else {
+            host
+        };
         self.port = url.port().unwrap_or(5432);
         let user = decode(url.username());
-        self.user = if user.is_empty() { "postgres".into() } else { user };
+        self.user = if user.is_empty() {
+            "postgres".into()
+        } else {
+            user
+        };
         self.password = url.password().map(decode).unwrap_or_default();
         let db = decode(url.path().trim_start_matches('/'));
         self.database = if db.is_empty() { self.user.clone() } else { db };
         for (k, v) in url.query_pairs() {
             if k == "sslmode" {
-                self.ssl_mode = SslMode::parse(&v)
-                    .with_context(|| format!("Unknown sslmode \"{v}\""))?;
+                self.ssl_mode =
+                    SslMode::parse(&v).with_context(|| format!("Unknown sslmode \"{v}\""))?;
             }
         }
         Ok(())
@@ -203,8 +218,10 @@ mod tests {
 
     #[test]
     fn parses_full_url() {
-        let mut c = ConnectionConfig::default();
-        c.name = "keep".into();
+        let mut c = ConnectionConfig {
+            name: "keep".into(),
+            ..Default::default()
+        };
         c.apply_url("postgresql://al%40ice:p%3Ass@db.example.com:6543/my%20db?sslmode=require")
             .unwrap();
         assert_eq!(c.name, "keep");

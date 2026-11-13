@@ -37,7 +37,11 @@ impl ObjectTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let editor = cx.new(|cx| EditorState::new(window, cx).language("sql").line_number(true));
+        let editor = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language("sql")
+                .line_number(true)
+        });
         let subscriptions = vec![cx.subscribe(&session, |this, _, ev, cx| {
             if let SessionEvent::Connected = ev {
                 this.reload(cx);
@@ -81,7 +85,7 @@ impl ObjectTab {
                         this.detail = Some(detail);
                         this.set_editor_pending = true;
                     }
-                    Err(e) => this.error = Some(format!("{e:#}").into()),
+                    Err(e) => this.error = Some(zeble_core::db::error_text(&e).into()),
                 }
                 cx.notify();
             })
@@ -123,17 +127,11 @@ impl Render for ObjectTab {
                     .gap_2()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_medium()
-                            .truncate()
-                            .child(format!(
-                                "{}.{}",
-                                self.object.schema,
-                                self.object.display_name()
-                            )),
-                    )
+                    .child(div().text_sm().font_medium().truncate().child(format!(
+                        "{}.{}",
+                        self.object.schema,
+                        self.object.display_name()
+                    )))
                     .child(
                         div()
                             .text_sm()

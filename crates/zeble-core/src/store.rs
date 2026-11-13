@@ -215,7 +215,11 @@ mod tests {
         store.delete(&c.id).unwrap();
 
         let reloaded = ConnectionStore::load(path.clone()).unwrap();
-        let names: Vec<_> = reloaded.connections().iter().map(|c| c.name.clone()).collect();
+        let names: Vec<_> = reloaded
+            .connections()
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
         assert_eq!(names, ["a", "a copy", "b2"]);
         assert_ne!(copy.id, a.id);
 

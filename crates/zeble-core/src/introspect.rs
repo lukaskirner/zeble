@@ -249,10 +249,7 @@ pub struct RelationInfo {
     pub has_ctid: bool,
 }
 
-pub async fn load_relation(
-    client: &impl GenericClient,
-    oid: u32,
-) -> anyhow::Result<RelationInfo> {
+pub async fn load_relation(client: &impl GenericClient, oid: u32) -> anyhow::Result<RelationInfo> {
     let columns = client
         .query(
             "SELECT a.attname, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, \
@@ -355,7 +352,11 @@ pub async fn load_relation(
     let view_definition = meta.get::<_, Option<String>>(3).map(|body| {
         let schema: String = meta.get(4);
         let name: String = meta.get(5);
-        let kw = if relkind == "m" { "MATERIALIZED VIEW" } else { "VIEW" };
+        let kw = if relkind == "m" {
+            "MATERIALIZED VIEW"
+        } else {
+            "VIEW"
+        };
         format!(
             "CREATE {kw} {} AS\n{}",
             display_qualified(&schema, &name),
@@ -388,9 +389,7 @@ pub async fn load_object_detail(
     obj: &DbObject,
 ) -> anyhow::Result<ObjectDetail> {
     let oid = obj.oid;
-    let q = |sql: &'static str| async move {
-        client.query(sql, &[&oid]).await.map_err(pg_err)
-    };
+    let q = |sql: &'static str| async move { client.query(sql, &[&oid]).await.map_err(pg_err) };
     let name = obj.qualified_name();
     let mut properties = vec![
         ("Schema".to_string(), obj.schema.clone()),
@@ -477,15 +476,20 @@ pub async fn load_object_detail(
             format!("CREATE TYPE {name} AS ENUM (\n{body}\n);")
         }
         ObjectKind::Domain => {
-            let rows = q("SELECT format_type(typbasetype, typtypmod), typnotnull, typdefault \
-                          FROM pg_type WHERE oid = $1")
+            let rows = q(
+                "SELECT format_type(typbasetype, typtypmod), typnotnull, typdefault \
+                          FROM pg_type WHERE oid = $1",
+            )
             .await?;
             let r = &rows[0];
             let base: String = r.get(0);
             let not_null: bool = r.get(1);
             let default: Option<String> = r.get(2);
             properties.push(("Base type".into(), base.clone()));
-            properties.push(("Not null".into(), if not_null { "yes" } else { "no" }.into()));
+            properties.push((
+                "Not null".into(),
+                if not_null { "yes" } else { "no" }.into(),
+            ));
             let checks: Vec<(String, String)> = q(
                 "SELECT conname::text, pg_get_constraintdef(oid, true) FROM pg_constraint \
                  WHERE contypid = $1 AND contype = 'c' ORDER BY conname",
@@ -529,8 +533,8 @@ pub async fn load_object_detail(
             format!("CREATE TYPE {name} AS (\n{body}\n);")
         }
         ObjectKind::Range => {
-            let rows = q("SELECT format_type(rngsubtype, NULL) FROM pg_range WHERE rngtypid = $1")
-                .await?;
+            let rows =
+                q("SELECT format_type(rngsubtype, NULL) FROM pg_range WHERE rngtypid = $1").await?;
             let sub: String = rows[0].get(0);
             properties.push(("Subtype".into(), sub.clone()));
             format!("CREATE TYPE {name} AS RANGE (\n    SUBTYPE = {sub}\n);")

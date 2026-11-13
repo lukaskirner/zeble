@@ -1,19 +1,16 @@
 //! The start window: saved connections (drag to reorder) and the form to add
 //! or edit one. Double-clicking a connection opens it in a new window.
 
-use std::path::PathBuf;
-
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     label::Label,
     menu::{ContextMenuExt as _, PopupMenuItem},
     v_flex,
-    WindowExt as _,
 };
-use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use zeble_core::{ConnectionConfig, store::ConnectionStore};
 
 use crate::{
@@ -35,10 +32,8 @@ pub fn init(cx: &mut App) {
         Ok(s) => (s, None),
         Err(e) => (
             // Keep the broken file untouched: saves go to a side file.
-            ConnectionStore::load(PathBuf::from(
-                zeble_core::store::data_dir().join("connections.recovered.json"),
-            ))
-            .expect("empty store"),
+            ConnectionStore::load(zeble_core::store::data_dir().join("connections.recovered.json"))
+                .expect("empty store"),
             Some(format!("Could not read saved connections: {e:#}").into()),
         ),
     };
@@ -79,7 +74,9 @@ pub fn open_launcher(cx: &mut App) {
         cx.new(|cx| Launcher::new(window, cx))
     }) {
         Ok((handle, _)) => {
-            cx.set_global(LauncherWindow(handle.downcast::<gpui_kit::component::Root>()));
+            cx.set_global(LauncherWindow(
+                handle.downcast::<gpui_kit::component::Root>(),
+            ));
         }
         Err(e) => eprintln!("failed to open window: {e:#}"),
     }
@@ -118,10 +115,11 @@ impl Launcher {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let connections = connections(cx);
         let subscriptions = vec![cx.observe(&connections, |_, _, cx| cx.notify())];
-        window.observe_window_appearance(|window, cx| {
-            gpui_kit::component::Theme::sync_system_appearance(Some(window), cx)
-        })
-        .detach();
+        window
+            .observe_window_appearance(|window, cx| {
+                gpui_kit::component::Theme::sync_system_appearance(Some(window), cx)
+            })
+            .detach();
         let mut this = Self {
             connections,
             selected: None,
@@ -149,19 +147,20 @@ impl Launcher {
             |this, _, ev: &FormEvent, window, cx| match ev {
                 FormEvent::Saved(config) => {
                     let config = config.clone();
-                    let result = this
-                        .connections
-                        .update(cx, |c, cx| {
-                            let r = c.store.upsert(config.clone());
-                            cx.notify();
-                            r
-                        });
+                    let result = this.connections.update(cx, |c, cx| {
+                        let r = c.store.upsert(config.clone());
+                        cx.notify();
+                        r
+                    });
                     match result {
                         Ok(()) => {
                             this.selected = Some(config.id.clone());
                             window.push_notification("Connection saved", cx);
                         }
-                        Err(e) => window.push_notification(format!("Save failed: {e:#}"), cx),
+                        Err(e) => window.push_notification(
+                            format!("Save failed: {}", zeble_core::db::error_text(&e)),
+                            cx,
+                        ),
                     }
                     cx.notify();
                 }
@@ -184,14 +183,9 @@ impl Launcher {
 
     fn select(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = Some(id.to_string());
-        let already = self
-            .form
-            .as_ref()
-            .is_some_and(|f| f.read(cx).id() == id);
-        if !already {
-            if let Some(config) = self.connections.read(cx).store.get(id).cloned() {
-                self.show_form(config, false, window, cx);
-            }
+        let already = self.form.as_ref().is_some_and(|f| f.read(cx).id() == id);
+        if !already && let Some(config) = self.connections.read(cx).store.get(id).cloned() {
+            self.show_form(config, false, window, cx);
         }
         cx.notify();
     }
@@ -211,7 +205,10 @@ impl Launcher {
         match result {
             Ok(Some(copy)) => self.select(&copy.id, window, cx),
             Ok(None) => {}
-            Err(e) => window.push_notification(format!("Duplicate failed: {e:#}"), cx),
+            Err(e) => window.push_notification(
+                format!("Duplicate failed: {}", zeble_core::db::error_text(&e)),
+                cx,
+            ),
         }
     }
 
@@ -226,7 +223,9 @@ impl Launcher {
             let id = id.clone();
             alert
                 .title(format!("Delete \"{}\"?", config.display_name()))
-                .description("The saved connection and its query tabs are removed. This cannot be undone.")
+                .description(
+                    "The saved connection and its query tabs are removed. This cannot be undone.",
+                )
                 .confirm()
                 .ok_text("Delete")
                 .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
@@ -239,7 +238,10 @@ impl Launcher {
                             r
                         });
                         if let Err(e) = result {
-                            window.push_notification(format!("Delete failed: {e:#}"), cx);
+                            window.push_notification(
+                                format!("Delete failed: {}", zeble_core::db::error_text(&e)),
+                                cx,
+                            );
                         }
                         if this.selected.as_deref() == Some(&id) {
                             this.selected = None;
@@ -296,10 +298,7 @@ impl Launcher {
                                 h_flex()
                                     .gap_1()
                                     .child(
-                                        Label::new(name.clone())
-                                            .text_sm()
-                                            .font_medium()
-                                            .truncate(),
+                                        Label::new(name.clone()).text_sm().font_medium().truncate(),
                                     )
                                     .when(config.read_only, |d| {
                                         d.child(
@@ -342,18 +341,29 @@ impl Launcher {
                     d.border_b_2().border_color(cx.theme().drag_border)
                 }
             })
-            .on_drop(cx.listener(move |this, dragged: &DraggedConnection, window, cx| {
-                let result = this.connections.update(cx, |c, cx| {
-                    let r = c.store.move_to(dragged.ix, ix);
-                    cx.notify();
-                    r
-                });
-                if let Err(e) = result {
-                    window.push_notification(format!("Reorder failed: {e:#}"), cx);
-                }
-            }))
+            .on_drop(
+                cx.listener(move |this, dragged: &DraggedConnection, window, cx| {
+                    let result = this.connections.update(cx, |c, cx| {
+                        let r = c.store.move_to(dragged.ix, ix);
+                        cx.notify();
+                        r
+                    });
+                    if let Err(e) = result {
+                        window.push_notification(
+                            format!("Reorder failed: {}", zeble_core::db::error_text(&e)),
+                            cx,
+                        );
+                    }
+                }),
+            )
             .context_menu(move |menu, _, _| {
-                let item = |label: &'static str, action: fn(&mut Launcher, &str, &mut Window, &mut Context<Launcher>)| {
+                let item = |label: &'static str,
+                            action: fn(
+                    &mut Launcher,
+                    &str,
+                    &mut Window,
+                    &mut Context<Launcher>,
+                )| {
                     let entity = entity.clone();
                     let id = id.clone();
                     PopupMenuItem::new(label).on_click(move |_, window, cx| {
@@ -464,33 +474,29 @@ impl Render for Launcher {
                             .child("Double-click to connect · drag to reorder"),
                     ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .map(|d| match &self.form {
-                        Some(form) => d.child(form.clone()),
-                        None => d.child(
-                            v_flex()
-                                .size_full()
-                                .items_center()
-                                .justify_center()
-                                .gap_3()
-                                .text_color(theme.muted_foreground)
-                                .child(Icon::new(IconName::Inbox).size_12())
-                                .child("Select a connection to edit it, or double-click to connect.")
-                                .child(
-                                    Button::new("new-connection-2")
-                                        .outline()
-                                        .label("New Connection")
-                                        .icon(IconName::Plus)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.new_connection(window, cx)
-                                        })),
-                                ),
-                        ),
-                    }),
-            )
+            .child(div().flex_1().h_full().min_w_0().map(|d| {
+                match &self.form {
+                    Some(form) => d.child(form.clone()),
+                    None => d.child(
+                        v_flex()
+                            .size_full()
+                            .items_center()
+                            .justify_center()
+                            .gap_3()
+                            .text_color(theme.muted_foreground)
+                            .child(Icon::new(IconName::Inbox).size_12())
+                            .child("Select a connection to edit it, or double-click to connect.")
+                            .child(
+                                Button::new("new-connection-2")
+                                    .outline()
+                                    .label("New Connection")
+                                    .icon(IconName::Plus)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.new_connection(window, cx)
+                                    })),
+                            ),
+                    ),
+                }
+            }))
     }
 }
