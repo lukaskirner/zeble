@@ -8574,6 +8574,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
+ "parking_lot",
+ "zeble-core",
 ]
 
 [[package]]

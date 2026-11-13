@@ -1,5 +1,6 @@
 [package]
 name = "zeble-app"
+description = "Zeble: a read-mostly PostgreSQL browser built with GPUI."
 version.workspace = true
 edition.workspace = true
 
@@ -8,5 +9,7 @@ name = "zeble"
 path = "src/main.rs"
 
 [dependencies]
+zeble-core = { path = "../zeble-core" }
 gpui-kit = { version = "=0.9.1", features = ["tree-sitter-sql"] }
 anyhow = "1"
+parking_lot = "0.12"

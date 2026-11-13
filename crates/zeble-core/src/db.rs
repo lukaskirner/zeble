@@ -18,6 +18,9 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::config::{ConnectionConfig, SslMode};
 
+/// A connection borrowed from the browsing pool; derefs to a `tokio_postgres::Client`.
+pub type PooledClient = deadpool_postgres::Object;
+
 /// Connections in the shared pool used by the sidebar and table tabs.
 pub const POOL_SIZE: usize = 4;
 
