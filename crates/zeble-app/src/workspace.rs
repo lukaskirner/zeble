@@ -32,7 +32,22 @@ use crate::{
 
 actions!(
     workspace,
-    [NewQueryTab, CloseTab, RefreshSchema, NextTab, PrevTab]
+    [
+        NewQueryTab,
+        CloseTab,
+        RefreshSchema,
+        NextTab,
+        PrevTab,
+        ActivateTab1,
+        ActivateTab2,
+        ActivateTab3,
+        ActivateTab4,
+        ActivateTab5,
+        ActivateTab6,
+        ActivateTab7,
+        ActivateTab8,
+        ActivateTab9,
+    ]
 );
 
 const CONTEXT: &str = "ConnectionWindow";
@@ -46,6 +61,16 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(keys("mod-r"), RefreshSchema, Some(CONTEXT)),
         KeyBinding::new("ctrl-tab", NextTab, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-tab", PrevTab, Some(CONTEXT)),
+        // Cmd/Ctrl+1–9 jump to tabs 1–9 by position.
+        KeyBinding::new(keys("mod-1"), ActivateTab1, Some(CONTEXT)),
+        KeyBinding::new(keys("mod-2"), ActivateTab2, Some(CONTEXT)),
+        KeyBinding::new(keys("mod-3"), ActivateTab3, Some(CONTEXT)),
+        KeyBinding::new(keys("mod-4"), ActivateTab4, Some(CONTEXT)),
+        KeyBinding::new(keys("mod-5"), ActivateTab5, Some(CONTEXT)),
+        KeyBinding::new(keys("mod-6"), ActivateTab6, Some(CONTEXT)),
+        KeyBinding::new(keys("mod-7"), ActivateTab7, Some(CONTEXT)),
+        KeyBinding::new(keys("mod-8"), ActivateTab8, Some(CONTEXT)),
+        KeyBinding::new(keys("mod-9"), ActivateTab9, Some(CONTEXT)),
     ]);
 }
 
@@ -311,6 +336,28 @@ impl ConnectionWindow {
         }));
     }
 
+    /// Show tab `ix` (0-based) and move focus into it, so the next shortcut
+    /// is not sent to an element of the tab that was just hidden. An index
+    /// past the last tab does nothing.
+    fn switch_to(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix < self.tabs.len() {
+            self.activate(ix, cx);
+            self.focus_active(window, cx);
+        }
+    }
+
+    /// Focus the active query tab's editor, or the window itself.
+    fn focus_active(&self, window: &mut Window, cx: &mut Context<Self>) {
+        match self
+            .active
+            .and_then(|a| self.tabs.get(a))
+            .map(|t| &t.content)
+        {
+            Some(TabContent::Query(q)) => q.update(cx, |q, cx| q.focus_editor(window, cx)),
+            _ => self.focus_handle.focus(window, cx),
+        }
+    }
+
     fn close_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(ix).cloned() else {
             return;
@@ -329,10 +376,10 @@ impl ConnectionWindow {
                     .confirm()
                     .ok_text("Roll Back and Close")
                     .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
-                    .on_ok(move |_, _, cx| {
+                    .on_ok(move |_, window, cx| {
                         weak.update(cx, |this, cx| {
                             if let Some(ix) = this.tabs.iter().position(|t| t.id == tab_id) {
-                                this.remove_tab(ix, cx);
+                                this.remove_tab(ix, window, cx);
                             }
                         })
                         .ok();
@@ -341,10 +388,10 @@ impl ConnectionWindow {
             });
             return;
         }
-        self.remove_tab(ix, cx);
+        self.remove_tab(ix, window, cx);
     }
 
-    fn remove_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
+    fn remove_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let tab = self.tabs.remove(ix);
         if let TabContent::Query(q) = &tab.content {
             q.update(cx, |q, _| q.close_connection());
@@ -356,6 +403,7 @@ impl ConnectionWindow {
             other => other,
         };
         self.activate(new_active.unwrap_or(0), cx);
+        self.focus_active(window, cx);
     }
 
     fn move_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
@@ -562,7 +610,9 @@ impl ConnectionWindow {
                                 this.close_tab(ix, window, cx)
                             })),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| this.activate(ix, cx)))
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.switch_to(ix, window, cx)),
+                    )
                     .on_drag(DraggedTab { ix, title }, |drag, _, _, cx| {
                         cx.stop_propagation();
                         cx.new(|_| drag.clone())
@@ -631,6 +681,15 @@ impl Render for ConnectionWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &RefreshSchema, _, cx| this.refresh_schema(cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab1, w, cx| this.switch_to(0, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab2, w, cx| this.switch_to(1, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab3, w, cx| this.switch_to(2, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab4, w, cx| this.switch_to(3, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab5, w, cx| this.switch_to(4, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab6, w, cx| this.switch_to(5, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab7, w, cx| this.switch_to(6, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab8, w, cx| this.switch_to(7, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab9, w, cx| this.switch_to(8, w, cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| {
                 if !this.tabs.is_empty() {
                     let next = this.active.map_or(0, |a| (a + 1) % this.tabs.len());
