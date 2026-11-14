@@ -40,6 +40,15 @@ Rust, [GPUI](https://www.gpui.rs) and [gpui-kit](https://github.com/longbridge/g
 
 Editing table data from the grid is not implemented yet.
 
+## Install
+
+Download `Zeble-<version>.dmg` from the
+[latest release](https://github.com/lukaskirner/zeble/releases/latest), open it and drag
+**Zeble** to **Applications**. Zeble is not notarized by Apple, so macOS blocks the first launch.
+Allow it in **System Settings → Privacy & Security → Open Anyway**, or run
+`xattr -dr com.apple.quarantine /Applications/Zeble.app`. It needs macOS 11 or later and runs
+on Apple Silicon and Intel.
+
 ## Build and run
 
 You need Rust (stable). On macOS you need the Xcode command line tools. On Linux, install the
@@ -94,3 +103,18 @@ To test against a different server, set `ZEBLE_TEST_URL=postgres://…`.
 - The statement splitter handles quotes, dollar-quoting and comments. It does not handle
   SQL-standard `BEGIN ATOMIC … END` function bodies, which get split at their inner semicolons.
 - Keyboard hints in the UI show macOS symbols (⌘). On Linux and Windows the shortcuts use Ctrl.
+
+## CI and releases
+
+GitHub Actions runs clippy and the tests, against a seeded Postgres service, on pull requests
+into `master` and on pushes to `master` (`.github/workflows/ci.yml`).
+
+To release:
+
+1. Bump `version` in the root `Cargo.toml` and commit it to `master`.
+2. Run `git tag v<version> && git push origin v<version>`.
+
+`.github/workflows/release.yml` then checks that the tag matches the version, runs the tests,
+and builds the universal app with `scripts/bundle-macos.sh` on a macOS runner. It publishes a
+GitHub release with `Zeble-<version>.dmg`, auto-generated notes and the install steps. Locally,
+`scripts/bundle-macos.sh` builds the same DMG into `tmp/`.

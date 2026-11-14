@@ -3,8 +3,9 @@
 #
 #   scripts/bundle-macos.sh [output-dir]     # default: ./tmp
 #
-# Produces <output-dir>/Zeble.app and <output-dir>/Zeble.zip. Run on macOS
-# with Rust and the Xcode command line tools installed.
+# Produces <output-dir>/Zeble.app, Zeble.zip and Zeble-<version>.dmg (open
+# it and drag Zeble to Applications). Run on macOS with Rust and the Xcode
+# command line tools installed. CI runs the same script to build releases.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -23,7 +24,8 @@ for t in "${TARGETS[@]}"; do
   MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release -p zeble-app --target "$t"
 done
 
-rm -rf "$APP" "$OUT/Zeble.zip"
+DMG="$OUT/Zeble-$VERSION.dmg"
+rm -rf "$APP" "$OUT/Zeble.zip" "$DMG"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp assets/icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 lipo -create -output "$APP/Contents/MacOS/zeble" \
@@ -53,5 +55,13 @@ PLIST
 codesign --force --deep --sign - "$APP"
 ditto -c -k --keepParent "$APP" "$OUT/Zeble.zip"
 
+# DMG: the app next to a link to /Applications, the usual drag-to-install window.
+STAGE="$(mktemp -d)"
+cp -R "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname "Zeble $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+rm -rf "$STAGE"
+
 echo "Built $APP ($(lipo -archs "$APP/Contents/MacOS/zeble"))"
 echo "Zipped $OUT/Zeble.zip"
+echo "Disk image $DMG"

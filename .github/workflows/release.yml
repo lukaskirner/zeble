@@ -1,0 +1,93 @@
+# Push a tag like v0.2.0 (matching `version` in Cargo.toml) to test, build the
+# universal macOS app and publish it as a GitHub release with a DMG.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Check tag matches Cargo.toml
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build macOS app
+    needs: [version, test]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build Zeble.app and DMG
+        run: scripts/bundle-macos.sh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zeble-${{ needs.version.outputs.version }}
+          path: dist/Zeble-${{ needs.version.outputs.version }}.dmg
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Zeble-${{ needs.version.outputs.version }}
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Install
+
+          1. Download `Zeble-<version>.dmg` below, open it and drag **Zeble** to **Applications**.
+          2. Zeble is not notarized by Apple, so macOS blocks the first launch. Allow it in
+             **System Settings → Privacy & Security → Open Anyway**, or run:
+
+             ```sh
+             xattr -dr com.apple.quarantine /Applications/Zeble.app
+             ```
+
+          Runs on macOS 11 or later, Apple Silicon and Intel.
+          NOTES
+          sed -i "s/<version>/$VERSION/" notes.md
+          gh release create "$GITHUB_REF_NAME" "Zeble-$VERSION.dmg" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Zeble $VERSION" \
+            --notes-file notes.md \
+            --generate-notes
