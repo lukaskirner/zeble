@@ -16,7 +16,8 @@ Rust, [GPUI](https://www.gpui.rs) and [gpui-kit](https://github.com/longbridge/g
   - **Sidebar**: schemas with their tables, views, materialized views, foreign tables, functions,
     procedures, sequences and types (enum, domain, composite, range), plus a filter box and
     refresh (⌘R).
-  - **Tabs**: closable (⌘W) and reorderable by dragging.
+  - **Tabs**: ⌘1–⌘9 switch to the first nine tabs, ⌘W closes the active one, and tabs can be
+    reordered by dragging.
 - **Table and view tabs**
   - **Data**: a virtualized grid with sticky column headers that show each column's type.
     Click a header to sort on the server (ascending, descending, off).
