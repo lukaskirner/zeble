@@ -6,6 +6,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+#[cfg(target_os = "macos")]
 const ICON_PNG: &[u8] = include_bytes!("../../../assets/icon/icon-512.png");
 /// Window icons are sent to the X server in one property; 256 px is plenty
 /// for window managers and keeps the request small.
