@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Zeble">
+  <rect width="128" height="128" rx="28" fill="#14161C"/>
+  <!-- Z formed by filled cells of a 3x3 table grid -->
+  <g fill="#FFFFFF">
+    <rect x="22" y="22" width="24" height="24" rx="5"/>
+    <rect x="52" y="22" width="24" height="24" rx="5"/>
+    <rect x="82" y="22" width="24" height="24" rx="5"/>
+    <rect x="52" y="52" width="24" height="24" rx="5"/>
+    <rect x="22" y="82" width="24" height="24" rx="5"/>
+    <rect x="52" y="82" width="24" height="24" rx="5"/>
+    <rect x="82" y="82" width="24" height="24" rx="5"/>
+  </g>
+  <!-- empty cells, outline only -->
+  <g fill="none" stroke="#2E3444" stroke-width="2">
+    <rect x="23" y="53" width="22" height="22" rx="4"/>
+    <rect x="83" y="53" width="22" height="22" rx="4"/>
+  </g>
+</svg>

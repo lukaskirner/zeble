@@ -54,6 +54,11 @@ sudo apt-get install build-essential pkg-config clang libxkbcommon-dev libxkbcom
 cargo run --release -p zeble-app      # binary: target/release/zeble
 ```
 
+The app icon is `icon.svg`. After changing it, run `scripts/render-icon.sh` (needs
+`rsvg-convert`; on Linux also `png2icns`) to regenerate `assets/icon/`. `scripts/bundle-macos.sh`
+puts `AppIcon.icns` into `Zeble.app`, and the plain binary sets the Dock icon (macOS) or window
+icon (X11) itself.
+
 Saved connections are stored in `connections.json` in the platform config folder:
 `~/Library/Application Support/zeble` on macOS and `~/.config/zeble` on Linux. Set
 `ZEBLE_DATA_DIR` to use a different folder. **Passwords are stored in plain text** in that file,

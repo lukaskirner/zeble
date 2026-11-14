@@ -68,6 +68,7 @@ pub fn open_launcher(cx: &mut App) {
             ..Default::default()
         }),
         app_id: Some("zeble".into()),
+        icon: crate::icon::window_icon(),
         ..Default::default()
     };
     match gpui_kit::open_window(options, cx, |window, cx| {

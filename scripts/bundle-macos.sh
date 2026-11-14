@@ -25,6 +25,7 @@ done
 
 rm -rf "$APP" "$OUT/Zeble.zip"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp assets/icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 lipo -create -output "$APP/Contents/MacOS/zeble" \
   target/aarch64-apple-darwin/release/zeble target/x86_64-apple-darwin/release/zeble
 
@@ -37,6 +38,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Zeble</string>
   <key>CFBundleIdentifier</key><string>dev.zeble.app</string>
   <key>CFBundleExecutable</key><string>zeble</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>

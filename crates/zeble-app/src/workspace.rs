@@ -83,6 +83,7 @@ pub fn open_connection_window(config: ConnectionConfig, cx: &mut App) {
             ..Default::default()
         }),
         app_id: Some("zeble".into()),
+        icon: crate::icon::window_icon(),
         ..Default::default()
     };
     let result = gpui_kit::open_window(options, cx, |window, cx| {

@@ -3,6 +3,7 @@
 mod assets;
 mod form;
 mod grid;
+mod icon;
 mod launcher;
 mod object_tab;
 mod query_tab;
@@ -26,6 +27,7 @@ fn main() {
     });
     app.run(|cx| {
         gpui_kit::init(cx);
+        icon::set_dock_icon();
         gpui_kit::component::Theme::sync_system_appearance(None, cx);
         launcher::init(cx);
         workspace::init(cx);
